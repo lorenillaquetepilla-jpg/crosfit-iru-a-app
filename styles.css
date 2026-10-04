@@ -243,3 +243,21 @@ table.lb th{font-size:12px;color:var(--muted);text-align:left;padding:6px 6px;bo
 table.lb td{padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:top}
 table.lb td:last-child,table.lb th:last-child{text-align:right}
 table.lb tr.mine td{background:var(--brand-soft)}
+/* PR party */
+.party{position:fixed;inset:0;z-index:100;display:grid;place-items:center;padding:16px;background:radial-gradient(circle at 50% 42%,rgba(200,16,46,.55),rgba(27,13,16,.82) 70%);animation:pIn .25s ease-out}
+.party.out{animation:pOut .35s ease-in forwards}
+.party canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:auto}
+.party-card{position:relative;background:#fff;border-radius:22px;padding:22px 22px 18px;width:min(340px,100%);text-align:center;box-shadow:0 20px 60px rgba(0,0,0,.4);animation:pPop .6s cubic-bezier(.2,1.6,.4,1) both .1s}
+.party-cara{width:84px;height:84px;margin:-62px auto 4px;background:#fff;border-radius:50%;padding:8px;box-shadow:0 6px 20px rgba(0,0,0,.25);animation:pWig 1s ease-in-out .6s 2}
+.party-cara svg{width:100%;height:100%}
+.party-k{font-family:"Permanent Marker",cursive;color:var(--pana);font-size:19px;letter-spacing:.03em}
+.party-v{font-family:Oswald,Inter,sans-serif;font-size:72px;font-weight:700;line-height:1;color:var(--brand);margin-top:6px;background:linear-gradient(90deg,var(--brand),var(--pana),#F5C518,var(--pana),var(--brand));background-size:300% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:pShine 2.4s linear infinite}
+.party-v small{font-size:28px}
+.party-l{font-family:Oswald,Inter,sans-serif;font-size:22px;font-weight:600;text-transform:uppercase;margin-top:2px}
+.party-up{display:inline-block;margin:10px 0 16px;background:var(--ok-soft);color:var(--ok);font-weight:700;border-radius:999px;padding:4px 12px;font-size:14px}
+@keyframes pIn{from{opacity:0}}
+@keyframes pOut{to{opacity:0}}
+@keyframes pPop{from{transform:scale(.3) rotate(-8deg);opacity:0}}
+@keyframes pWig{25%{transform:rotate(-12deg)}75%{transform:rotate(12deg)}}
+@keyframes pShine{to{background-position:300% 0}}
+@media (prefers-reduced-motion:reduce){.party,.party-card,.party-cara,.party-v{animation:none}}

@@ -684,6 +684,90 @@ VIEWS.historial = root => {
   return { draw };
 };
 
+/* ---------- PR party: confetti, streamers, glitter and a colour blast ---------- */
+function prParty({ lift, v, prev }) {
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  try { navigator.vibrate?.([60, 40, 120]); } catch (e) {}
+  const wrap = document.createElement("div");
+  wrap.className = "party";
+  wrap.innerHTML = `<canvas></canvas><div class="party-card" role="alertdialog" aria-live="assertive">
+      <div class="party-cara">${CARA}</div>
+      <div class="party-k">¡NUEVA MARCA PERSONAL!</div>
+      <div class="party-v">${v.toLocaleString("es-ES")}<small> kg</small></div>
+      <div class="party-l">${esc(lift)}</div>
+      ${prev != null ? `<div class="party-up">+${(Math.round((v - prev) * 10) / 10).toLocaleString("es-ES")} kg sobre tu anterior</div>` : '<div class="party-up">¡Tu primera marca!</div>'}
+      <button class="btn primary block" id="partyOk">¡Vamos! 💪</button></div>`;
+  document.body.appendChild(wrap);
+  const close = () => { wrap.classList.add("out"); setTimeout(() => { running = false; wrap.remove(); }, 350); };
+  wrap.querySelector("#partyOk").onclick = close;
+  wrap.addEventListener("click", e => { if (e.target === wrap || e.target.tagName === "CANVAS") close(); });
+  wrap.querySelector("#partyOk").focus();
+  let running = !reduce;
+  if (reduce) return;
+  const cv = wrap.querySelector("canvas"), cx = cv.getContext("2d");
+  const dpr = Math.min(2, devicePixelRatio || 1);
+  const size = () => { cv.width = innerWidth * dpr; cv.height = innerHeight * dpr; cx.setTransform(dpr, 0, 0, dpr, 0, 0); };
+  size(); addEventListener("resize", size);
+  const COLS = ["#C8102E", "#F5C518", "#FFFFFF", "#FF5FA2", "#3EC1F3", "#7BE07B", "#FF8A00", "#B44CFF", "#6B2D3A"];
+  const W = () => innerWidth, H = () => innerHeight, rnd = (a, b) => a + Math.random() * (b - a), pick = a => a[Math.floor(Math.random() * a.length)];
+  const parts = [];
+  const burst = (x, y, n, power, kinds) => {
+    for (let i = 0; i < n; i++) {
+      const a = rnd(0, Math.PI * 2), sp = rnd(power * .35, power);
+      const k = pick(kinds);
+      parts.push({ k, x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - power * .35, c: pick(COLS), s: k === "glitter" ? rnd(1.2, 2.8) : rnd(6, 11),
+        r: rnd(0, 6.28), vr: rnd(-.3, .3), life: 0, max: k === "glitter" ? rnd(70, 140) : rnd(150, 260), w: rnd(0, 6.28), len: rnd(40, 90) });
+    }
+  };
+  // Side cannons + central blast, then a second wave
+  const cannons = () => {
+    for (let i = 0; i < 70; i++) { parts.push(cannonPart(0, H() * .85, 1)); parts.push(cannonPart(W(), H() * .85, -1)); }
+  };
+  const cannonPart = (x, y, dir) => { const k = pick(["conf", "conf", "conf", "stream", "glitter"]); const sp = rnd(9, 19), a = rnd(-1.35, -.75);
+    return { k, x, y, vx: Math.cos(a) * sp * dir, vy: Math.sin(a) * sp, c: pick(COLS), s: k === "glitter" ? rnd(1.2, 2.8) : rnd(6, 11), r: rnd(0, 6.28), vr: rnd(-.3, .3), life: 0, max: rnd(160, 260), w: rnd(0, 6.28), len: rnd(40, 90) }; };
+  burst(W() / 2, H() * .42, 160, 15, ["conf", "conf", "glitter", "glitter", "stream"]);
+  cannons();
+  setTimeout(() => running && burst(W() * .25, H() * .3, 70, 11, ["conf", "glitter", "stream"]), 450);
+  setTimeout(() => running && burst(W() * .75, H() * .3, 70, 11, ["conf", "glitter", "stream"]), 700);
+  setTimeout(() => running && cannons(), 1200);
+  // Colour blast rings
+  const rings = [{ t: 0, c: "#C8102E" }, { t: -8, c: "#F5C518" }, { t: -16, c: "#FF5FA2" }];
+  // Glitter that keeps falling from the top for a while
+  let rain = 0;
+  const tick = () => {
+    if (!running) { removeEventListener("resize", size); return; }
+    cx.clearRect(0, 0, W(), H());
+    for (const g of rings) { g.t++; if (g.t < 0 || g.t > 45) continue; const p = g.t / 45, R = Math.hypot(W(), H()) * .6 * p;
+      cx.globalAlpha = (1 - p) * .55; cx.strokeStyle = g.c; cx.lineWidth = 28 * (1 - p) + 2; cx.beginPath(); cx.arc(W() / 2, H() * .42, R, 0, 6.28); cx.stroke(); }
+    cx.globalAlpha = 1;
+    if (rain++ < 220 && rain % 2 === 0) parts.push({ k: "glitter", x: rnd(0, W()), y: -5, vx: rnd(-.5, .5), vy: rnd(1, 3), c: pick(COLS), s: rnd(1.2, 2.6), r: 0, vr: 0, life: 0, max: 200, w: 0, len: 0 });
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const p = parts[i]; p.life++;
+      if (p.life > p.max || p.y > H() + 60) { parts.splice(i, 1); continue; }
+      const drag = p.k === "glitter" ? .985 : .975;
+      p.vx *= drag; p.vy = p.vy * drag + (p.k === "glitter" ? .06 : .16); p.w += .12;
+      p.x += p.vx + (p.k === "conf" ? Math.sin(p.w) * .8 : 0); p.y += p.vy; p.r += p.vr;
+      const fade = Math.min(1, (p.max - p.life) / 40);
+      cx.globalAlpha = fade;
+      if (p.k === "conf") {
+        cx.save(); cx.translate(p.x, p.y); cx.rotate(p.r); cx.scale(1, Math.cos(p.w * 2)); cx.fillStyle = p.c; cx.fillRect(-p.s / 2, -p.s / 3, p.s, p.s * .66); cx.restore();
+      } else if (p.k === "stream") {
+        cx.strokeStyle = p.c; cx.lineWidth = 3; cx.lineCap = "round"; cx.beginPath();
+        for (let j = 0; j <= 10; j++) { const t = j / 10, yy = p.y - t * p.len, xx = p.x + Math.sin(p.w + t * 6) * 7; j ? cx.lineTo(xx, yy) : cx.moveTo(xx, yy); }
+        cx.stroke();
+      } else {
+        const tw = .5 + .5 * Math.sin(p.life * .5 + p.w);
+        cx.fillStyle = p.c; cx.globalAlpha = fade * (.4 + .6 * tw);
+        cx.beginPath(); cx.arc(p.x, p.y, p.s * (.6 + tw * .6), 0, 6.28); cx.fill();
+        if (tw > .85) { cx.fillStyle = "#fff"; cx.fillRect(p.x - p.s * 2, p.y - .5, p.s * 4, 1); cx.fillRect(p.x - .5, p.y - p.s * 2, 1, p.s * 4); }
+      }
+    }
+    cx.globalAlpha = 1;
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
 /* ---------- view: PANEL DEL ATLETA (marcas, ranking, muro) ---------- */
 let panelSec = "marcas", rankLift = "Back squat", rankSex = "";
 const ytId = u => { const m = String(u || "").match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|embed\/|live\/))([\w-]{11})/); return m ? m[1] : null; };
@@ -777,7 +861,9 @@ VIEWS.marcas = root => {
         if (video && !cleanUrl(video)) { $("#kE").textContent = "El enlace del vídeo tiene que empezar por https://"; return; }
         const prev = Object.values(mine).filter(m => m.lift === l), pr = !prev.length || v > Math.max(...prev.map(m => m.v));
         await safe(() => be.add("marks", { uid: S.user.uid, name: S.me.name, sex: S.me.sex || "", lift: l, v, date: $("#kD").value, video: cleanUrl(video), note: $("#kN").value.trim(), public: $("#kP").checked, pr, at: new Date().toISOString(), likes: {} }));
-        closeDlg(); toast(pr ? "🎉 ¡Nueva marca personal!" : "Marca apuntada.");
+        closeDlg();
+        if (pr && prev.length) prParty({ lift: l, v, prev: Math.max(...prev.map(m => m.v)) });
+        else toast(prev.length ? "Marca apuntada." : "¡Primera marca apuntada! Ahora a superarla 💪");
       };
     });
   };
