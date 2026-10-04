@@ -380,12 +380,16 @@ function scoreValue(type, txt) {
 function ranking(results, type) {
   return Object.entries(results).map(([id, r]) => ({ id, ...r })).sort((a, b) => (b.rx ? 1 : 0) - (a.rx ? 1 : 0) || (type === "time" ? a.value - b.value : b.value - a.value));
 }
+function trackCards(wod) {
+  return TRACKS.filter(t => t.id !== "crossfit" && wod?.tracks?.[t.id]?.text).map(t => `<div class="card track"><div class="k" style="color:${typeOf(t.id).c}">${esc(t.name)}</div><div class="pre">${esc(wod.tracks[t.id].text)}</div></div>`).join("");
+}
 function wodCard(date, wod) {
+  if (wod && !wod.text) return trackCards(wod) || wodCard(date, null);
   if (!wod) return `<div class="card">${cara("Sin WOD todavía", isStaff() ? "Publica el WOD de este día en la pestaña WOD." : "Los coaches aún no han publicado el WOD. ¡Paciencia!")}<button class="btn sm" data-hist>📚 Ver WODs anteriores</button></div>`;
-  return `<div class="wod"><div class="row between"><div class="k">WOD · ${fmtShort(date)}</div><button class="btn sm wodlink" data-hist>📚 WODs anteriores</button></div><h3>${esc(wod.title || "WOD")}</h3><div class="pre">${esc(wod.text)}</div></div>`;
+  return `<div class="wod"><div class="row between"><div class="k">WOD · ${fmtShort(date)}</div><button class="btn sm wodlink" data-hist>📚 WODs anteriores</button></div><h3>${esc(wod.title || "WOD")}</h3><div class="pre">${esc(wod.text)}</div></div>${trackCards(wod)}`;
 }
 function rankingCard(date, wod, results) {
-  if (!wod || wod.score === "none") return "";
+  if (!wod?.text || wod.score === "none") return "";
   const list = ranking(results, wod.score), mine = results[`${date}__${S.user.uid}`];
   return `<div class="card"><div class="row between"><h3>Pizarra</h3>${!isStaff() ? `<button class="btn sm ${mine ? "" : "primary"}" id="logR">${mine ? "Editar mi resultado" : "Apuntar mi resultado"}</button>` : ""}</div>
     ${list.length ? `<ol class="rank">${list.map((r, i) => `<li><span class="pos">${i + 1}</span><span class="grow"><b>${esc(r.name)}</b> ${r.rx ? '<span class="chip">RX</span>' : '<span class="chip grey">Escalado</span>'}${r.note ? `<br><span class="small muted">${esc(r.note)}</span>` : ""}</span>
@@ -500,35 +504,138 @@ VIEWS.clases = root => {
 };
 
 /* ---------- view: WOD (staff) ---------- */
-let wodDay = null, wodCopy = null;
+let wodDay = null, wodCopy = null, wodMode = "semana", wodWeek = null, wodTrack = "crossfit";
+const TRACKS = [{ id: "crossfit", name: "WOD CrossFit" }, { id: "halter", name: "Halterofilia" }, { id: "gim", name: "Gimnásticos" }, { id: "endurance", name: "Endurance" }];
+const weekStart = off => addDays(today(), -wdOf(today()) + off * 7);
 VIEWS.wod = root => {
   wodDay ||= today();
-  let wod = null, results = {}, u1, u2;
+  if (wodCopy) wodMode = "dia";
+  // From Saturday on, coaches are usually preparing next week.
+  if (wodWeek == null) wodWeek = wdOf(today()) >= 5 ? 1 : 0;
+  let wod = null, results = {}, week = {}, u1, u2, u3;
   const listen = () => { u1?.(); u2?.();
-    u1 = be.watch("wods/" + wodDay, w => { wod = w; draw(); }, fail);
-    u2 = be.watchQuery("results", [["date", "==", wodDay]], o => { results = o; draw(); }, fail); };
-  viewSubs.push(() => { u1?.(); u2?.(); });
-  const draw = () => {
+    u1 = be.watch("wods/" + wodDay, w => { wod = w; if (wodMode === "dia") draw(); }, fail);
+    u2 = be.watchQuery("results", [["date", "==", wodDay]], o => { results = o; if (wodMode === "dia") draw(); }, fail); };
+  const listenWeek = () => { u3?.(); const from = weekStart(wodWeek);
+    u3 = be.watchQuery("wods", [["date", ">=", from], ["date", "<=", addDays(from, 6)]], o => { week = o; if (wodMode === "semana") draw(); }, fail); };
+  viewSubs.push(() => { u1?.(); u2?.(); u3?.(); });
+  const modeBar = () => `<div class="tabs2"><button data-mode="semana" aria-pressed="${wodMode === "semana"}">Programar la semana</button><button data-mode="dia" aria-pressed="${wodMode === "dia"}">Un día</button></div>`;
+  const bindMode = () => root.querySelectorAll("[data-mode]").forEach(b => b.onclick = () => { wodMode = b.dataset.mode; draw(); });
+
+  const drawDay = () => {
     const src = wodCopy || wod;
-    root.innerHTML = `<div class="h"><h2>WOD</h2><button class="btn sm" data-hist>📚 Anteriores</button></div><p class="small muted" style="margin:-6px 0 10px">${fmtDay(wodDay)}${wodCopy ? ` · copiado de «${esc(wodCopy.title)}». Elige el día y publícalo` : ""}</p>
+    root.innerHTML = `<div class="h"><h2>Programación</h2><button class="btn sm" data-hist>📚 Anteriores</button></div>${modeBar()}
+      <p class="small muted" style="margin:-4px 0 10px">${fmtDay(wodDay)}${wodCopy ? ` · copiado de «${esc(wodCopy.title)}». Elige el día y publícalo` : ""}</p>
       ${dayPicker(wodDay, addDays(today(), -3), 11)}
       <div class="card" style="margin-top:10px"><form id="wf">
+        <h3>CrossFit · WOD</h3>
         <label>Nombre del WOD<input id="wT" maxlength="60" value="${esc(src?.title || "")}" placeholder="Ej.: Fran, AMRAP 20'…"></label>
         <label>Entrenamiento<textarea id="wX" maxlength="2000" placeholder="Calentamiento, fuerza, WOD…">${esc(src?.text || "")}</textarea></label>
         <label>Cómo se puntúa<select id="wS">${Object.entries(SCORE).map(([k, v]) => `<option value="${k}" ${(src?.score || "time") === k ? "selected" : ""}>${v}</option>`).join("")}</select></label>
-        <div class="dlgbtns">${wod ? '<button type="button" class="btn danger" id="wD">Borrar</button>' : ""}<button class="btn primary">${wod ? "Guardar cambios" : "Publicar WOD"}</button></div>
+        ${TRACKS.filter(t => t.id !== "crossfit").map(t => `<label>${t.name} (opcional)<textarea data-tr="${t.id}" maxlength="2000" style="min-height:80px" placeholder="Entreno de ${t.name.toLowerCase()} de este día">${esc((wodCopy ? wodCopy : wod)?.tracks?.[t.id]?.text || "")}</textarea></label>`).join("")}
+        <div class="dlgbtns">${wod ? '<button type="button" class="btn danger" id="wD">Borrar el día</button>' : ""}<button class="btn primary">${wod ? "Guardar cambios" : "Publicar"}</button></div>
       </form></div>
-      ${wod ? `<div class="h"><h2>Así lo ven los atletas</h2></div>${wodCard(wodDay, wod)}${rankingCard(wodDay, wod, results)}` : ""}`;
+      ${wod?.text ? `<div class="h"><h2>Así lo ven los atletas</h2></div>${wodCard(wodDay, wod)}${rankingCard(wodDay, wod, results)}` : ""}`;
+    bindMode();
     root.querySelector("[data-hist]").onclick = () => { wodCopy = null; go("historial"); };
     bindDays(root, d => { wodDay = d; wod = null; results = {}; listen(); });
-    $("#wD")?.addEventListener("click", async () => { if (await confirmDlg("Borrar WOD", "¿Seguro que quieres borrar el WOD de este día?", "Borrar")) safe(() => be.del("wods/" + wodDay)); });
-    $("#wf").onsubmit = async ev => { ev.preventDefault(); const text = $("#wX").value.trim(); if (!text) return toast("Escribe el entrenamiento.");
-      await safe(() => be.set("wods/" + wodDay, { title: $("#wT").value.trim() || "WOD", text, score: $("#wS").value, by: S.user.uid, at: new Date().toISOString() })); wodCopy = null; $("#wX").blur(); toast("WOD publicado."); };
+    $("#wD")?.addEventListener("click", async () => { if (await confirmDlg("Borrar el día", "¿Seguro que quieres borrar la programación de este día?", "Borrar")) safe(() => be.del("wods/" + wodDay)); });
+    $("#wf").onsubmit = async ev => { ev.preventDefault();
+      const text = $("#wX").value.trim(), tracks = {};
+      root.querySelectorAll("[data-tr]").forEach(x => tracks[x.dataset.tr] = x.value.trim() ? { text: x.value.trim() } : null);
+      if (!text && !Object.values(tracks).some(Boolean)) return toast("Escribe al menos un entrenamiento.");
+      await safe(() => be.set("wods/" + wodDay, { date: wodDay, title: text ? $("#wT").value.trim() || "WOD" : "", text, score: $("#wS").value, tracks, by: S.user.uid, at: new Date().toISOString() }));
+      wodCopy = null; document.activeElement?.blur(); toast("Publicado."); };
     bindRanking(root, wodDay, wod, results);
   };
-  listen();
+
+  const drawWeek = () => {
+    const from = weekStart(wodWeek), tr = TRACKS.find(t => t.id === wodTrack);
+    const days = [...Array(7)].map((_, i) => addDays(from, i));
+    const val = (d, k) => { const w = week[d]; if (!w) return ""; return tr.id === "crossfit" ? w[k] || "" : w.tracks?.[tr.id]?.[k] || ""; };
+    const filled = t => days.filter(d => t.id === "crossfit" ? week[d]?.text : week[d]?.tracks?.[t.id]?.text).length;
+    root.innerHTML = `<div class="h"><h2>Programación</h2><button class="btn sm" data-hist>📚 Anteriores</button></div>${modeBar()}
+      <div class="row between" style="margin-bottom:10px"><button class="btn sm" id="wPrev" aria-label="Semana anterior">‹</button>
+        <b>Semana del ${fmtShort(from)} al ${fmtShort(addDays(from, 6))}</b><button class="btn sm" id="wNext" aria-label="Semana siguiente">›</button></div>
+      <div class="seg" style="margin-bottom:10px">${TRACKS.map(t => `<button data-track="${t.id}" aria-pressed="${t.id === wodTrack}">${esc(t.name)} <span>${filled(t)}/7</span></button>`).join("")}</div>
+      <div class="row" style="flex-wrap:wrap;gap:8px;margin-bottom:12px"><button class="btn sm" id="wPaste">📋 Pegar la semana de golpe</button><button class="btn sm" id="wCopy">↻ Copiar de la semana pasada</button></div>
+      <form id="wkf">${days.map((d, i) => `<div class="card"><div class="row between"><h3>${DAYS_L[i]} <span class="small muted" style="font-family:Inter;font-weight:500">${fmtShort(d)}</span></h3>${!slotsFor(d).length ? '<span class="chip grey">Sin clases</span>' : ""}</div>
+        ${tr.id === "crossfit" ? `<div class="grid2"><label>Nombre<input data-d="${d}" data-k="title" maxlength="60" value="${esc(val(d, "title"))}" placeholder="Fran, AMRAP…"></label><label>Puntúa por<select data-d="${d}" data-k="score">${Object.entries(SCORE).map(([k, v]) => `<option value="${k}" ${(val(d, "score") || "time") === k ? "selected" : ""}>${v}</option>`).join("")}</select></label></div>` : ""}
+        <textarea data-d="${d}" data-k="text" maxlength="2000" style="min-height:90px" placeholder="${tr.id === "crossfit" ? "WOD del " + DAYS_L[i].toLowerCase() : `${tr.name} del ${DAYS_L[i].toLowerCase()}`}">${esc(val(d, "text"))}</textarea></div>`).join("")}
+        <button class="btn primary block" style="position:sticky;bottom:calc(var(--nav-h) + env(safe-area-inset-bottom,0px) + 8px);z-index:5">Guardar ${esc(tr.name.toLowerCase())} de la semana</button></form>`;
+    bindMode();
+    root.querySelector("[data-hist]").onclick = () => go("historial");
+    $("#wPrev").onclick = () => { wodWeek--; listenWeek(); };
+    $("#wNext").onclick = () => { wodWeek++; listenWeek(); };
+    root.querySelectorAll("[data-track]").forEach(b => b.onclick = () => { wodTrack = b.dataset.track; draw(); });
+    const field = (d, k) => root.querySelector(`[data-d="${d}"][data-k="${k}"]`);
+    $("#wPaste").onclick = () => openDlg(`<h3>Pegar la semana</h3><p class="small muted">Pega aquí la programación tal cual la tengas (WhatsApp, notas…). Cada día tiene que empezar con su nombre: <b>Lunes</b>, <b>Martes</b>… y la app lo reparte sola.</p>
+      <textarea id="pT" style="min-height:220px" placeholder="LUNES&#10;Fran&#10;21-15-9 thrusters y pull-ups&#10;&#10;MARTES&#10;…"></textarea>
+      <div class="dlgbtns"><button class="btn" id="pC">Cancelar</button><button class="btn primary" id="pOk">Repartir por días</button></div>`, () => {
+      $("#pC").onclick = closeDlg;
+      $("#pOk").onclick = () => {
+        const parts = splitWeek($("#pT").value);
+        const n = Object.keys(parts).length;
+        if (!n) return toast("No encuentro los días. Empieza cada día con «Lunes», «Martes»…");
+        closeDlg();
+        for (const [i, txt] of Object.entries(parts)) { const d = days[i]; field(d, "text").value = txt.body;
+          if (tr.id === "crossfit" && txt.title && !field(d, "title").value) field(d, "title").value = txt.title; }
+        toast(`Repartido en ${n} ${n === 1 ? "día" : "días"}. Revisa y pulsa Guardar.`);
+      };
+    });
+    $("#wCopy").onclick = async () => {
+      const prevFrom = addDays(from, -7);
+      const prev = {}; for (let i = 0; i < 7; i++) { const w = await be.get("wods/" + addDays(prevFrom, i)).catch(() => null); if (w) prev[i] = w; }
+      let n = 0;
+      days.forEach((d, i) => { const w = prev[i]; if (!w) return; const src = tr.id === "crossfit" ? w : w.tracks?.[tr.id]; if (!src?.text) return; n++;
+        field(d, "text").value = src.text; if (tr.id === "crossfit") { field(d, "title").value = src.title || ""; field(d, "score").value = src.score || "time"; } });
+      toast(n ? `Copiados ${n} días. Cambia lo que quieras y pulsa Guardar.` : "La semana pasada no tiene nada de " + tr.name.toLowerCase() + ".");
+    };
+    $("#wkf").onsubmit = async ev => { ev.preventDefault();
+      let n = 0;
+      await safe(async () => {
+        for (const d of days) {
+          const text = field(d, "text").value.trim(), cur = week[d];
+          if (tr.id === "crossfit") {
+            const title = text ? field(d, "title").value.trim() || "WOD" : "", score = field(d, "score").value;
+            if (!cur && !text) continue;
+            if (cur && cur.text === text && (cur.title || "") === title && (cur.score || "time") === score) continue;
+            await be.merge("wods/" + d, { date: d, title, text, score, by: S.user.uid, at: new Date().toISOString() }); n++;
+          } else {
+            if ((cur?.tracks?.[tr.id]?.text || "") === text) continue;
+            await be.merge("wods/" + d, { date: d, tracks: { [tr.id]: text ? { text } : null }, by: S.user.uid, at: new Date().toISOString() }); n++;
+          }
+        }
+      });
+      document.activeElement?.blur();
+      toast(n ? `Semana guardada: ${n} ${n === 1 ? "día actualizado" : "días actualizados"}.` : "No había cambios.");
+    };
+  };
+
+  const draw = () => wodMode === "semana" ? drawWeek() : drawDay();
+  listen(); listenWeek();
   return { draw };
 };
+
+// "LUNES\n...\nMARTES\n..." → { 0: {title, body}, 1: ... }
+function splitWeek(raw) {
+  const names = ["lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"];
+  const norm = s => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  const out = {}; let cur = null;
+  for (const line of String(raw).replace(/\r/g, "").split("\n")) {
+    const m = norm(line.trim()).replace(/^[^a-z]+/, "").match(/^(lunes|martes|miercoles|jueves|viernes|sabado|domingo)\b[\s:.\-–—)]*(.*)$/);
+    if (m && line.trim().length < 60) { cur = names.indexOf(m[1]); out[cur] = { lines: [] }; const rest = line.trim().replace(/^[^A-Za-zÁÉÍÓÚáéíóú]*\S+\s*[:.\-–—)]*\s*/, ""); if (rest) out[cur].lines.push(rest); continue; }
+    if (cur != null) out[cur].lines.push(line);
+  }
+  const res = {};
+  for (const [k, v] of Object.entries(out)) {
+    const lines = v.lines.join("\n").trim().split("\n");
+    const body = lines.join("\n").trim(); if (!body) continue;
+    const first = lines[0].trim();
+    res[k] = { body, title: first.length <= 40 && lines.length > 1 ? first.replace(/^["“«]|["”»]$/g, "") : "" };
+  }
+  return res;
+}
 
 /* ---------- view: HISTÓRICO DE WODs ---------- */
 let histQ = "";
@@ -538,13 +645,14 @@ VIEWS.historial = root => {
   const draw = () => {
     const q = histQ.trim().toLowerCase();
     const list = Object.entries(wods).filter(([d]) => d <= today()).sort((a, b) => b[0].localeCompare(a[0]))
-      .filter(([, w]) => !q || `${w.title} ${w.text}`.toLowerCase().includes(q));
+      .filter(([, w]) => w.text || Object.values(w.tracks || {}).some(t => t?.text))
+      .filter(([, w]) => !q || `${w.title} ${w.text} ${Object.values(w.tracks || {}).map(t => t?.text || "").join(" ")}`.toLowerCase().includes(q));
     const byMonth = {}; for (const e of list) (byMonth[monthOf(e[0])] ||= []).push(e);
-    root.innerHTML = `<div class="h"><h2>WODs anteriores</h2><button class="btn sm" id="hBack">← Volver</button></div>
-      <input class="search" id="hq" type="search" placeholder="Buscar: Fran, thrusters, burpees…" value="${esc(histQ)}">
+    root.innerHTML = `<div class="h"><h2>Entrenos anteriores</h2><button class="btn sm" id="hBack">← Volver</button></div>
+      <input class="search" id="hq" type="search" placeholder="Buscar: Fran, snatch, muscle-up…" value="${esc(histQ)}">
       <p class="small muted" style="margin-top:-2px">${Object.keys(wods).length} WODs guardados.${isStaff() ? "" : " Los que hiciste llevan tu resultado."}</p>
       ${list.length ? Object.entries(byMonth).map(([m, es]) => `<div class="sched-day"><h4>${monthName(m)} ${m.slice(0, 4)}</h4><div class="card" style="padding-top:4px;padding-bottom:4px"><div class="list">${es.map(([d, w]) => { const r = mine[`${d}__${S.user.uid}`];
-        return `<button class="li" data-w="${d}"><span class="av">${parse(d).getDate()}</span><span class="grow" style="min-width:0"><span class="t">${esc(w.title || "WOD")}</span><br><span class="small muted" style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(w.text.replace(/\n+/g, " · "))}</span></span>${r ? `<span class="chip">${esc(r.score)}</span>` : ""}›</button>`; }).join("")}</div></div></div>`).join("")
+        return `<button class="li" data-w="${d}"><span class="av">${parse(d).getDate()}</span><span class="grow" style="min-width:0"><span class="t">${esc(w.text ? w.title || "WOD" : TRACKS.filter(t => w.tracks?.[t.id]?.text).map(t => t.name).join(" · "))}</span>${TRACKS.filter(t => t.id !== "crossfit" && w.text && w.tracks?.[t.id]?.text).map(t => ` <span class="chip grey">${esc(t.name)}</span>`).join("")}<br><span class="small muted" style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc((w.text || Object.values(w.tracks || {}).find(t => t?.text)?.text || "").replace(/\n+/g, " · "))}</span></span>${r ? `<span class="chip">${esc(r.score)}</span>` : ""}›</button>`; }).join("")}</div></div></div>`).join("")
         : `<div class="card">${cara("Nada por aquí", q ? "No hay ningún WOD con esa palabra." : "Cuando se publiquen WODs se guardarán aquí.")}</div>`}`;
     $("#hBack").onclick = () => go(back);
     const hq = $("#hq"); hq.oninput = () => { histQ = hq.value; const pos = hq.selectionStart; draw(); const n = $("#hq"); n.focus(); n.setSelectionRange(pos, pos); };

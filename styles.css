@@ -195,3 +195,5 @@ dialog::backdrop{background:rgba(27,13,16,.45)}
   .slot .time{width:54px;font-size:18px}
 }
 .wod .wodlink{background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.25);color:#fff;position:relative;z-index:1}
+.track .k{font-size:12px;letter-spacing:.12em;text-transform:uppercase;font-weight:700;margin-bottom:4px}
+.track .pre{line-height:1.55}
