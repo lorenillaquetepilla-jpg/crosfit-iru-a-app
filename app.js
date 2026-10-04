@@ -430,7 +430,7 @@ function logResult(date, wod, cur) {
 /* ---------- view: HOY ---------- */
 VIEWS.hoy = root => {
   const d = today();
-  let bookings = {}, wod, results = {}, notices = {}, extra = { members: {}, leads: {} };
+  let bookings = {}, wod, results = {}, notices = {}, comps = {}, extra = { members: {}, leads: {} };
   const draw = () => {
     const slots = slotsFor(d);
     if (isStaff()) {
@@ -444,10 +444,11 @@ VIEWS.hoy = root => {
           ${leads && isAdmin() ? `<button class="btn block" data-go="box" data-sec="pruebas">✉️ ${leads} ${leads === 1 ? "persona quiere" : "personas quieren"} clase de prueba</button>` : ""}
           ${unpaid && isAdmin() ? `<button class="btn block" data-go="socios" data-f="impago">💶 ${unpaid} con la cuota de ${monthName(thisMonth())} pendiente</button>` : ""}
         </div></div>` : ""}
+        ${compBanner(comps)}
         <div class="h"><h2>Clases de hoy</h2><span class="sub">Toca un nombre para marcar que ha venido</span></div>
         <div class="card" id="sl">${slots.map(s => slotRow(d, s, bookings, { staff: true })).join("") || '<p class="empty">Hoy no hay clases.</p>'}</div>
         <div class="h"><h2>WOD de hoy</h2></div>${wodCard(d, wod)}${rankingCard(d, wod, results)}`;
-      bindSlots(root, d, bookings, slots); bindRanking(root, d, wod, results);
+      bindSlots(root, d, bookings, slots); bindRanking(root, d, wod, results); bindBanner(root);
       root.querySelectorAll("[data-go]").forEach(b => b.onclick = () => { if (b.dataset.f) sociosFilter = b.dataset.f; if (b.dataset.sec) boxSec = b.dataset.sec; go(b.dataset.go); });
       return;
     }
@@ -463,6 +464,7 @@ VIEWS.hoy = root => {
       : ["¿Hoy no entrenas?", 'Caravinagre te está mirando… <a href="#" data-go="clases">Reserva una clase</a>.'];
     const ns = Object.entries(notices).sort((a, b) => b[1].at.localeCompare(a[1].at)).slice(0, 3);
     root.innerHTML = `${cara(msg[0], msg[1])}
+      ${upcomingComps(comps).length ? compBanner(comps) : ""}
       ${ns.map(([, n]) => `<div class="card" style="border-left:5px solid var(--brand)"><h3>📣 ${esc(n.title)}</h3><div class="pre">${esc(n.body)}</div></div>`).join("")}
       <div class="h"><h2>WOD de hoy</h2></div>${wodCard(d, wod)}${rankingCard(d, wod, results)}
       ${u.plan ? `<div class="h"><h2>Este mes</h2><a href="#" class="small" data-go="cuota">Ver mi cuota</a></div><div class="quota">
@@ -470,13 +472,14 @@ VIEWS.hoy = root => {
         <div class="qbox"><div class="n">${u.openMax == null ? "∞" : Math.max(0, u.openMax - u.open)}</div><div class="l">sesiones Open te quedan</div></div></div>` : ""}
       <div class="h"><h2>Mis reservas</h2><a href="#" class="small" data-go="clases">Reservar</a></div>
       <div class="card">${mineNext.length ? `<div class="list">${mineNext.slice(0, 6).map(b => `<div class="li" style="cursor:default"><span class="av" style="background:${typeOf(b.type).c};color:#fff">${b.s.slice(0, 2)}</span><span class="grow"><span class="t">${esc(typeOf(b.type).name)} · ${b.s}</span><br><span class="small muted">${fmtDay(b.date)}${b.wait ? " · en lista de espera" : ""}</span></span></div>`).join("")}</div>` : '<p class="empty">No tienes clases reservadas.</p>'}</div>`;
-    bindRanking(root, d, wod, results);
+    bindRanking(root, d, wod, results); bindBanner(root);
     root.querySelectorAll("[data-go]").forEach(b => b.onclick = e => { e.preventDefault(); go(b.dataset.go); });
   };
   queryV("bookings", [["date", "==", d]], o => { bookings = o; draw(); });
   watchV("wods/" + d, w => { wod = w; draw(); });
   queryV("results", [["date", "==", d]], o => { results = o; draw(); });
   queryV("notices", [], o => { notices = o; draw(); });
+  queryV("comps", isStaff() ? [] : [["visible", "==", true]], o => { comps = o; draw(); });
   if (isStaff()) {
     queryV("members", [], o => { extra.members = o; membersCache = o; draw(); });
     if (isAdmin()) queryV("leads", [["done", "==", false]], o => { extra.leads = o; draw(); });
@@ -805,6 +808,163 @@ VIEWS.marcas = root => {
   return { draw };
 };
 
+/* ---------- view: COMPETICIONES ---------- */
+let compSel = null, compCat = null, compTab = "info";
+const COMP_SCORE = { time: "Tiempo (menos es mejor)", reps: "Repeticiones", rounds: "Rondas + reps", kg: "Kilos" };
+// Classic CrossFit scoring: place in each event = points, lowest total wins. Missing score = last place + 1.
+function leaderboard(comp, entries, cat) {
+  const list = entries.filter(e => e.cat === cat);
+  const pts = Object.fromEntries(list.map(e => [e.id, { e, total: 0, places: {} }]));
+  for (const ev of comp.events || []) {
+    const done = list.filter(e => e.scores?.[ev.id]?.value != null)
+      .sort((a, b) => ev.score === "time" ? a.scores[ev.id].value - b.scores[ev.id].value : b.scores[ev.id].value - a.scores[ev.id].value);
+    let place = 0, last = null;
+    done.forEach((e, i) => { const v = e.scores[ev.id].value; if (v !== last) { place = i + 1; last = v; } pts[e.id].places[ev.id] = place; pts[e.id].total += place; });
+    for (const e of list) if (pts[e.id].places[ev.id] == null) { pts[e.id].places[ev.id] = null; pts[e.id].total += done.length + 1; }
+  }
+  return Object.values(pts).sort((a, b) => a.total - b.total || a.e.name.localeCompare(b.e.name));
+}
+const compOpen = c => (c.deadline || c.date) >= today();
+const upcomingComps = comps => Object.entries(comps).filter(([, c]) => c.date >= today() && (c.visible !== false || isStaff())).sort((a, b) => a[1].date.localeCompare(b[1].date));
+function compBanner(comps) {
+  const up = upcomingComps(comps)[0];
+  if (up) return `<button class="compban" data-comp="${up[0]}"><span class="trophy">🏆</span><span class="grow"><b>${esc(up[1].name)}</b><br><span class="small">${fmtDay(up[1].date)}${compOpen(up[1]) ? " · inscripciones abiertas" : ""}</span></span>›</button>`;
+  return `<button class="btn block ghost" data-comp="">🏆 Ver competiciones</button>`;
+}
+const bindBanner = root => root.querySelectorAll("[data-comp]").forEach(b => b.onclick = () => { compSel = b.dataset.comp || null; compTab = "info"; go("compes"); });
+
+VIEWS.compes = root => {
+  let comps = {}, entries = {}, un = null;
+  const listenEntries = () => { un?.(); entries = {}; if (!compSel) return; un = be.watchQuery("compEntries", [["compId", "==", compSel]], o => { entries = o; draw(); }, fail); };
+  viewSubs.push(() => un?.());
+  const draw = () => {
+    if (!compSel || !comps[compSel]) return drawList();
+    drawOne(compSel, comps[compSel]);
+  };
+  const drawList = () => {
+    const all = Object.entries(comps).filter(([, c]) => c.visible !== false || isStaff()).sort((a, b) => b[1].date.localeCompare(a[1].date));
+    const up = all.filter(([, c]) => c.date >= today()).reverse(), past = all.filter(([, c]) => c.date < today());
+    const card = ([id, c]) => `<button class="li" data-open="${id}"><span class="av" style="font-size:18px">🏆</span><span class="grow"><span class="t">${esc(c.name)}</span>${c.visible === false ? ' <span class="chip grey">Borrador</span>' : ""}<br><span class="small muted">${fmtDay(c.date)}${c.place ? " · " + esc(c.place) : ""}</span></span>›</button>`;
+    root.innerHTML = `<div class="h"><h2>Competiciones</h2><button class="btn sm" id="cBack">← Volver</button></div>
+      ${isAdmin() ? '<button class="btn primary block" id="cNew" style="margin-bottom:12px">＋ Crear competición</button>' : ""}
+      <div class="h" style="margin-top:4px"><h2 style="font-size:18px">Próximas</h2></div>
+      <div class="card">${up.length ? `<div class="list">${up.map(card).join("")}</div>` : cara("Nada a la vista", "Cuando el box prepare una competición la verás aquí.")}</div>
+      ${past.length ? `<div class="h"><h2 style="font-size:18px">Anteriores</h2></div><div class="card"><div class="list">${past.map(card).join("")}</div></div>` : ""}`;
+    $("#cBack").onclick = () => go(isAdmin() ? "box" : "hoy");
+    $("#cNew")?.addEventListener("click", () => compForm(null, { date: addDays(today(), 30), cats: ["RX", "Escalado"], team: false, events: [], visible: false }));
+    root.querySelectorAll("[data-open]").forEach(b => b.onclick = () => { compSel = b.dataset.open; compTab = "info"; compCat = null; listenEntries(); draw(); });
+  };
+  const drawOne = (id, c) => {
+    const list = Object.entries(entries).map(([k, e]) => ({ id: k, ...e }));
+    const mine = list.find(e => e.uid === S.user.uid);
+    const cats = c.cats?.length ? c.cats : ["General"];
+    compCat = cats.includes(compCat) ? compCat : (mine?.cat || cats[0]);
+    const full = c.cap && list.length >= c.cap;
+    const evs = (c.events || []).filter(ev => ev.visible || isStaff());
+    let body = "";
+    if (compTab === "info") body = `<div class="card">${c.desc ? `<div class="pre">${esc(c.desc)}</div><hr>` : ""}
+        <div class="kv"><span>📅 Fecha</span><b>${fmtDay(c.date)}</b></div>${c.place ? `<div class="kv"><span>📍 Lugar</span><b>${esc(c.place)}</b></div>` : ""}
+        <div class="kv"><span>👥 Formato</span><b>${c.team ? "Por parejas" : "Individual"}</b></div><div class="kv"><span>🏷️ Categorías</span><b>${cats.map(esc).join(", ")}</b></div>
+        ${c.price ? `<div class="kv"><span>💶 Inscripción</span><b>${money(c.price)} (se paga en el box)</b></div>` : ""}
+        <div class="kv"><span>⏳ Inscripciones hasta</span><b>${fmtDay(c.deadline || c.date)}</b></div>
+        <div class="kv"><span>✅ Inscritos</span><b>${list.length}${c.cap ? ` de ${c.cap}` : ""}</b></div></div>
+      ${!isStaff() ? (mine ? `<div class="card" style="border-left:5px solid var(--ok)"><b>¡Estás dentro!</b> Categoría ${esc(mine.cat)}${mine.partner ? ` con ${esc(mine.partner)}` : ""}.
+          ${compOpen(c) ? '<div style="margin-top:8px"><button class="btn sm danger" id="cOut">Borrarme</button></div>' : ""}</div>`
+        : compOpen(c) ? (full ? '<p class="empty">No quedan plazas.</p>' : '<button class="btn primary block" id="cIn">Inscribirme</button>') : '<p class="empty">Las inscripciones están cerradas.</p>') : ""}`;
+    if (compTab === "wods") body = evs.length ? evs.map((ev, i) => `<div class="wod"><div class="k">Prueba ${i + 1} · ${COMP_SCORE[ev.score].split(" (")[0]}${!ev.visible ? " · oculta a los atletas" : ""}</div><h3>${esc(ev.name)}</h3><div class="pre">${esc(ev.text || "")}</div></div>`).join("")
+      : `<div class="card">${cara("Pruebas en secreto", "El box desvelará los WODs de la competición más adelante. ¡Ve entrenando!")}</div>`;
+    if (compTab === "clasif") {
+      const lb = leaderboard({ ...c, events: evs }, list, compCat);
+      body = `${cats.length > 1 ? `<div class="gseg g3" style="margin-bottom:10px">${cats.map(k => `<button data-cat="${esc(k)}" aria-pressed="${k === compCat}">${esc(k)}</button>`).join("")}</div>` : ""}
+        <div class="card" style="overflow-x:auto">${lb.length ? `<table class="lb"><thead><tr><th>#</th><th>Atleta</th>${evs.map((ev, i) => `<th title="${esc(ev.name)}">P${i + 1}</th>`).join("")}<th>Pts</th></tr></thead><tbody>
+          ${lb.map((r, i) => `<tr class="${r.e.uid === S.user.uid ? "mine" : ""}"><td>${i < 3 ? ["🥇", "🥈", "🥉"][i] : i + 1}</td><td><b>${esc(r.e.name)}</b>${r.e.partner ? `<br><span class="small muted">+ ${esc(r.e.partner)}</span>` : ""}</td>
+            ${evs.map(ev => `<td>${r.e.scores?.[ev.id] ? `${esc(r.e.scores[ev.id].score)}<br><span class="small muted">${r.places[ev.id]}º</span>` : '<span class="muted">—</span>'}</td>`).join("")}<td><b>${r.total}</b></td></tr>`).join("")}</tbody></table>
+          <p class="small muted">Cada puesto en una prueba suma esos puntos (1º = 1 punto). Gana quien menos puntos tenga.</p>` : '<p class="empty">Aún no hay nadie inscrito en esta categoría.</p>'}</div>
+        ${isStaff() && evs.length ? `<div class="h"><h2 style="font-size:18px">Apuntar resultados</h2></div><div class="gseg">${evs.map((ev, i) => `<button data-score="${ev.id}">P${i + 1} · ${esc(ev.name)}</button>`).join("")}</div>` : ""}`;
+    }
+    if (compTab === "inscritos") body = `<div class="card">${list.length ? `<div class="list">${list.sort((a, b) => a.cat.localeCompare(b.cat) || a.name.localeCompare(b.name)).map(e => `<div class="li" style="cursor:default"><span class="av">${initials(e.name)}</span><span class="grow"><span class="t">${esc(e.name)}</span>${e.partner ? ` + ${esc(e.partner)}` : ""}<br><span class="small muted">${esc(e.cat)} · ${fmtShort(e.at.slice(0, 10))}</span></span>${isStaff() ? `<button class="btn sm danger" data-rmE="${e.id}">✕</button>` : ""}</div>`).join("")}</div>` : '<p class="empty">Nadie inscrito todavía.</p>'}
+      ${isStaff() ? '<button class="btn sm" id="cAddE" style="margin-top:8px">+ Inscribir a un socio</button>' : ""}</div>`;
+    const T = { info: "Info", wods: "Pruebas", clasif: "Clasificación", ...(isStaff() ? { inscritos: `Inscritos ${list.length}` } : {}) };
+    root.innerHTML = `<div class="h"><h2>${esc(c.name)}</h2><button class="btn sm" id="cBack">← Todas</button></div>
+      ${c.visible === false ? '<p class="small"><span class="chip warn">Borrador: los atletas aún no la ven</span></p>' : ""}
+      <div class="gseg ${Object.keys(T).length === 4 ? "" : "g3"}" style="margin-bottom:12px">${Object.entries(T).map(([k, v]) => `<button data-ct="${k}" aria-pressed="${compTab === k}">${v}</button>`).join("")}</div>
+      ${body}
+      ${isAdmin() ? '<button class="btn block" id="cEdit" style="margin-top:12px">✏️ Editar competición y pruebas</button>' : ""}`;
+    $("#cBack").onclick = () => { compSel = null; un?.(); draw(); };
+    root.querySelectorAll("[data-ct]").forEach(b => b.onclick = () => { compTab = b.dataset.ct; draw(); });
+    root.querySelectorAll("[data-cat]").forEach(b => b.onclick = () => { compCat = b.dataset.cat; draw(); });
+    $("#cEdit")?.addEventListener("click", () => compForm(id, c));
+    $("#cOut")?.addEventListener("click", async () => { if (await confirmDlg("Borrarme", "¿Seguro que te borras de la competición?", "Borrarme")) safe(() => be.del(`compEntries/${id}__${S.user.uid}`)); });
+    $("#cIn")?.addEventListener("click", () => joinDlg(id, c, cats, S.user.uid, S.me.name));
+    $("#cAddE")?.addEventListener("click", () => {
+      const ms = Object.entries(membersCache || {}).filter(([u, m]) => m.status === "active" && m.role === "athlete" && !entries[`${id}__${u}`]).sort((a, b) => a[1].name.localeCompare(b[1].name));
+      openDlg(`<h3>Inscribir a un socio</h3><label>Socio<select id="aeM">${ms.map(([u, m]) => `<option value="${u}">${esc(m.name)}</option>`).join("")}</select></label><div class="dlgbtns"><button class="btn" id="aeC">Cancelar</button><button class="btn primary" id="aeO">Seguir</button></div>`, () => {
+        $("#aeC").onclick = closeDlg; $("#aeO").onclick = () => { const u = $("#aeM").value; if (u) joinDlg(id, c, cats, u, membersCache[u].name); }; });
+    });
+    root.querySelectorAll("[data-rmE]").forEach(b => b.onclick = async () => { if (await confirmDlg("Quitar inscripción", "¿Quitas a esta persona de la competición?", "Quitar")) safe(() => be.del("compEntries/" + b.dataset.rme)); });
+    root.querySelectorAll("[data-score]").forEach(b => b.onclick = () => scoreDlg(c, c.events.find(ev => ev.id === b.dataset.score), list));
+  };
+  const joinDlg = (id, c, cats, uid, name) => openDlg(`<h3>Inscripción</h3><p class="muted small">${esc(c.name)} · ${fmtDay(c.date)}</p><form id="jf">
+      <label>Categoría<select id="jC">${cats.map(k => `<option>${esc(k)}</option>`).join("")}</select></label>
+      ${c.team ? '<label>Nombre de tu pareja<input id="jP" required maxlength="60"></label>' : ""}
+      ${c.price ? `<p class="small muted">La inscripción (${money(c.price)}) se paga en el box.</p>` : ""}
+      <div class="dlgbtns"><button type="button" class="btn" id="jX">Cancelar</button><button class="btn primary">Inscribir</button></div></form>`, () => {
+    $("#jX").onclick = closeDlg;
+    $("#jf").onsubmit = async e => { e.preventDefault();
+      await safe(() => be.set(`compEntries/${id}__${uid}`, { compId: id, uid, name, cat: $("#jC").value, partner: c.team ? $("#jP").value.trim() : "", at: new Date().toISOString(), scores: {} }));
+      closeDlg(); toast(uid === S.user.uid ? "¡Inscrito! A entrenar 💪" : "Inscrito."); };
+  });
+  const scoreDlg = (c, ev, list) => {
+    const rows = list.slice().sort((a, b) => a.cat.localeCompare(b.cat) || a.name.localeCompare(b.name));
+    openDlg(`<h3>${esc(ev.name)}</h3><p class="muted small">${COMP_SCORE[ev.score]}. ${ev.score === "time" ? "Escribe así: 8:45" : ev.score === "rounds" ? "Escribe así: 6+12" : "Solo el número"}. Deja vacío si no la ha hecho.</p>
+      <form id="sf">${rows.map(e => `<div class="row" style="margin-top:8px"><span class="grow small"><b>${esc(e.name)}</b><br><span class="muted">${esc(e.cat)}</span></span><input data-e="${e.id}" style="width:110px" value="${esc(e.scores?.[ev.id]?.score || "")}" inputmode="${ev.score === "kg" || ev.score === "reps" ? "decimal" : "text"}"></div>`).join("")}
+      <div class="err" id="sE"></div><div class="dlgbtns"><button type="button" class="btn" id="sX">Cancelar</button><button class="btn primary">Guardar resultados</button></div></form>`, b => {
+      $("#sX").onclick = closeDlg;
+      $("#sf").onsubmit = async e => { e.preventDefault();
+        const bad = [];
+        const upd = [...b.querySelectorAll("[data-e]")].map(x => { const t = x.value.trim(); if (!t) return [x.dataset.e, null]; const v = scoreValue(ev.score, t); if (v == null) bad.push(x); return [x.dataset.e, v == null ? null : { score: t, value: v }]; });
+        if (bad.length) { $("#sE").textContent = "Revisa los resultados marcados: no tienen el formato correcto."; bad.forEach(x => x.style.borderColor = "var(--bad)"); return; }
+        await safe(async () => { for (const [eid, sc] of upd) { const cur = entries[eid]; if (JSON.stringify(cur?.scores?.[ev.id] || null) === JSON.stringify(sc)) continue; await be.set("compEntries/" + eid, { ...cur, scores: { ...(cur.scores || {}), [ev.id]: sc } }); } });
+        closeDlg(); toast("Resultados guardados. La clasificación ya está actualizada."); };
+    });
+  };
+  const compForm = (id, c) => {
+    let evs = (c.events || []).map(x => ({ ...x }));
+    const paint = () => openDlg(`<h3>${id ? "Editar competición" : "Nueva competición"}</h3><form id="cf">
+      <label>Nombre<input id="fN" required maxlength="80" value="${esc(c.name || "")}" placeholder="Ej.: Iruña Throwdown"></label>
+      <div class="grid2"><label>Fecha<input id="fD" type="date" required value="${c.date || ""}"></label><label>Inscripciones hasta<input id="fL" type="date" value="${c.deadline || ""}"></label></div>
+      <label>Lugar<input id="fP" maxlength="80" value="${esc(c.place ?? "CrossFit Iruña")}"></label>
+      <label>Descripción<textarea id="fT" maxlength="2000" style="min-height:80px" placeholder="Horarios, premios, qué traer…">${esc(c.desc || "")}</textarea></label>
+      <label>Categorías (separadas por comas)<input id="fC" maxlength="200" value="${esc((c.cats || []).join(", "))}"></label>
+      <div class="grid2"><label>Precio inscripción (€)<input id="fM" type="number" min="0" step="0.5" value="${c.price ?? ""}" placeholder="Gratis"></label><label>Plazas<input id="fS" type="number" min="1" value="${c.cap ?? ""}" placeholder="Sin límite"></label></div>
+      <label class="check"><input type="checkbox" id="fTeam" ${c.team ? "checked" : ""}> Por parejas</label>
+      <label class="check"><input type="checkbox" id="fV" ${c.visible !== false ? "checked" : ""}> Visible para los atletas</label>
+      <h4 style="margin-top:16px">Pruebas</h4>
+      <div id="evs">${evs.map((ev, i) => `<div class="plan" style="display:block" data-i="${i}"><div class="grid2"><label>Nombre<input data-k="name" value="${esc(ev.name)}" required></label><label>Puntúa por<select data-k="score">${Object.entries(COMP_SCORE).map(([k, v]) => `<option value="${k}" ${ev.score === k ? "selected" : ""}>${v}</option>`).join("")}</select></label></div>
+        <label>WOD<textarea data-k="text" style="min-height:70px">${esc(ev.text || "")}</textarea></label>
+        <div class="row between" style="margin-top:6px"><label class="check" style="margin:0"><input type="checkbox" data-k="visible" ${ev.visible ? "checked" : ""}> Desvelada</label><button type="button" class="btn sm danger" data-rmv="${i}">Quitar</button></div></div>`).join("")}</div>
+      <button type="button" class="btn sm" id="addEv">+ Añadir prueba</button>
+      <div class="dlgbtns">${id ? '<button type="button" class="btn danger" id="cDel">Borrar</button>' : ""}<button type="button" class="btn" id="cX">Cancelar</button><button class="btn primary">Guardar</button></div></form>`, b => {
+      const collect = () => { c = { ...c, name: $("#fN").value, date: $("#fD").value, deadline: $("#fL").value, place: $("#fP").value, desc: $("#fT").value, cats: $("#fC").value.split(",").map(x => x.trim()).filter(Boolean),
+          price: $("#fM").value === "" ? null : Number($("#fM").value), cap: $("#fS").value === "" ? null : Number($("#fS").value), team: $("#fTeam").checked, visible: $("#fV").checked };
+        evs = [...b.querySelectorAll("[data-i]")].map((el, i) => ({ id: evs[i].id, name: el.querySelector("[data-k=name]").value.trim(), score: el.querySelector("[data-k=score]").value, text: el.querySelector("[data-k=text]").value.trim(), visible: el.querySelector("[data-k=visible]").checked })); };
+      $("#cX").onclick = closeDlg;
+      $("#addEv").onclick = () => { collect(); evs.push({ id: "e" + Date.now().toString(36), name: `Prueba ${evs.length + 1}`, score: "time", text: "", visible: false }); paint(); };
+      b.querySelectorAll("[data-rmv]").forEach(x => x.onclick = () => { collect(); evs.splice(Number(x.dataset.rmv), 1); paint(); });
+      $("#cDel")?.addEventListener("click", async () => { if (await confirmDlg("Borrar competición", "Se borrará con sus pruebas. ¿Seguro?", "Borrar")) { await safe(() => be.del("comps/" + id)); compSel = null; draw(); } });
+      $("#cf").onsubmit = async e => { e.preventDefault(); collect();
+        const doc = { name: c.name.trim(), date: c.date, deadline: c.deadline || c.date, place: c.place.trim(), desc: c.desc.trim(), cats: c.cats.length ? c.cats : ["General"], price: c.price, cap: c.cap, team: c.team, visible: c.visible, events: evs, at: c.at || new Date().toISOString() };
+        const nid = await safe(() => id ? be.set("comps/" + id, doc).then(() => id) : be.add("comps", doc));
+        if (nid) { closeDlg(); compSel = nid; listenEntries(); draw(); toast("Competición guardada."); } };
+    });
+    paint();
+  };
+  queryV("comps", isStaff() ? [] : [["visible", "==", true]], o => { comps = o; draw(); });
+  if (isStaff() && !membersCache) queryV("members", [], o => { membersCache = o; });
+  listenEntries();
+  return { draw };
+};
+
 /* ---------- view: TIENDA ---------- */
 let shopCat = "";
 VIEWS.tienda = root => {
@@ -987,10 +1147,10 @@ VIEWS.box = root => {
   let members = {}, pays = {}, week = {}, leads = {}, notices = {};
   const wkStart = addDays(today(), -wdOf(today()));
   const draw = () => {
-    const S2 = { resumen: "Resumen", horario: "Horario", tarifas: "Tarifas", tienda: "Tienda", avisos: "Avisos", pruebas: "Pruebas" };
+    const S2 = { resumen: "Resumen", horario: "Horario", tarifas: "Tarifas", tienda: "Tienda", avisos: "Avisos", pruebas: "Pruebas", compes: "🏆 Compes" };
     let h = `<div class="h"><h2>El box</h2></div><div class="gseg g3" style="margin-bottom:12px">${Object.entries(S2).map(([k, v]) => `<button data-s="${k}" aria-pressed="${boxSec === k}">${v}${k === "pruebas" && Object.values(leads).filter(l => !l.done).length ? ` <span>${Object.values(leads).filter(l => !l.done).length}</span>` : ""}</button>`).join("")}</div><div id="sec"></div>`;
     root.innerHTML = h;
-    root.querySelectorAll("[data-s]").forEach(b => b.onclick = () => { boxSec = b.dataset.s; draw(); });
+    root.querySelectorAll("[data-s]").forEach(b => b.onclick = () => { if (b.dataset.s === "compes") { compSel = null; return go("compes"); } boxSec = b.dataset.s; draw(); });
     const sec = $("#sec");
     if (boxSec === "tienda") { const v = VIEWS.tienda(sec); v.draw(); return; }
     SECS[boxSec](sec);

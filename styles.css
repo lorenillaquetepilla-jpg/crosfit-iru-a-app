@@ -231,3 +231,15 @@ details.more .plan{box-shadow:none}
 a.bump{text-decoration:none;color:var(--ink)}
 .bump:disabled{opacity:.6;cursor:default}
 .sel{user-select:all}
+.compban{display:flex;align-items:center;gap:12px;width:100%;text-align:left;border:0;cursor:pointer;background:linear-gradient(120deg,var(--ink),var(--brand));color:#fff;border-radius:var(--r);padding:14px 16px;margin-bottom:12px;box-shadow:var(--sh);font-size:15px}
+.compban .trophy{font-size:28px}
+.compban .small{color:#EBC9CF}
+.kv{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-top:1px solid var(--line);font-size:14.5px}
+.kv:first-of-type{border-top:0}
+.kv span{color:var(--muted)}
+.kv b{text-align:right}
+table.lb{width:100%;border-collapse:collapse;font-size:14px;font-variant-numeric:tabular-nums}
+table.lb th{font-size:12px;color:var(--muted);text-align:left;padding:6px 6px;border-bottom:1px solid var(--line);white-space:nowrap}
+table.lb td{padding:8px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+table.lb td:last-child,table.lb th:last-child{text-align:right}
+table.lb tr.mine td{background:var(--brand-soft)}

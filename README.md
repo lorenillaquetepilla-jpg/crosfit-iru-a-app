@@ -1,6 +1,6 @@
 # CrossFit Iruña · app del box
 
-App web instalable (PWA) para CrossFit Iruña: reservas con lista de espera, WOD con pizarra y "choca esos cinco", panel del atleta con marcas personales (con vídeo de YouTube), ranking por ejercicio y muro para picarse, catálogo de la tienda, cuotas y bonos con pago online, y panel del dueño (socios, cobros, horario, tarifas, avisos y clases de prueba).
+App web instalable (PWA) para CrossFit Iruña: reservas con lista de espera, WOD con pizarra y "choca esos cinco", panel del atleta con marcas personales (con vídeo de YouTube), ranking por ejercicio y muro para picarse, catálogo de la tienda, cuotas y bonos con pago online, y panel del dueño (socios, cobros, horario, tarifas, avisos, clases de prueba y competiciones con inscripción y clasificación).
 
 - Sin configurar Firebase (`firebase-config.js` con `PEGA_AQUI`) funciona en **modo demostración** con datos de ejemplo.
 - Alojamiento: GitHub Pages (gratis). Datos y usuarios: Firebase. Pagos: Stripe.

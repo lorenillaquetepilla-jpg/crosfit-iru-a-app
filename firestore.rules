@@ -84,6 +84,19 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    match /comps/{id} {
+      allow read: if isStaff() || (isMember() && resource.data.visible == true);
+      allow write: if isAdmin();
+    }
+    // compEntries/{compId}__{uid}; scores are written by the coaches.
+    match /compEntries/{id} {
+      allow read: if isMember();
+      allow create: if isStaff() || (isActive() && request.resource.data.uid == request.auth.uid
+        && id == request.resource.data.compId + '__' + request.auth.uid && request.resource.data.scores.size() == 0);
+      allow update: if isStaff();
+      allow delete: if isStaff() || (signedIn() && resource.data.uid == request.auth.uid);
+    }
+
     match /notices/{id} {
       allow read: if isMember();
       allow write: if isStaff();

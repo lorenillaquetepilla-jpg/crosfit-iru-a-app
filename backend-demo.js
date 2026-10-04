@@ -1,6 +1,6 @@
 // Modo demostración: mismos métodos que backend-firebase.js, con los datos guardados en este navegador.
 import { DEFAULT_BOX, DEFAULT_SCHEDULE } from "./defaults.js";
-const KEY = "cfi-demo-v4";
+const KEY = "cfi-demo-v5";
 
 const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const dayOff = n => { const d = new Date(); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() + n); return d; };
@@ -90,6 +90,17 @@ function seed() {
   prod("pr2", "Cinturón de halterofilia", "Cinturones", 36, "demo/cinturon.jpg", ["Azul", "Naranja", "Negro", "Rosa"]);
   prod("pr3", "Comba Fire 2.0", "Combas", 40, "demo/comba.jpg", ["Camuflaje", "Negro", "Plata", "Rojo"]);
   prod("pr4", "Tape No Second", "Tape", 3.5, "demo/tape.jpg", ["Azul", "Negro", "Rosa", "Verde"]);
+  db["comps/c1"] = { name: "Iruña Throwdown", date: ymd(dayOff(20)), deadline: ymd(dayOff(15)), place: "CrossFit Iruña", visible: true, team: false, price: 25, cap: 40, cats: ["RX", "Escalado"], at: now,
+    desc: "Nuestra compe de otoño. 3 pruebas, buen rollo y almuerzo al final.\nCalentamiento a las 9:00, primera prueba a las 10:00.",
+    events: [{ id: "e1", name: "Thruster ladder", score: "kg", text: "Escalera de thrusters: 1 rep cada 30\" subiendo 5 kg", visible: true },
+      { id: "e2", name: "Sprint chipper", score: "time", text: "30 wall balls\n20 burpees over bar\n10 power cleans", visible: true },
+      { id: "e3", name: "Final sorpresa", score: "reps", text: "", visible: false }] };
+  db["comps/c2"] = { ...db["comps/c1"], name: "Sanfermines WOD", date: ymd(dayOff(-88)), deadline: ymd(dayOff(-92)), desc: "Edición especial de San Fermín: de blanco y con pañuelico.", events: db["comps/c1"].events.slice(0, 2) };
+  const ent = (u, cat, s1, s2) => { db[`compEntries/c2__${u}`] = { compId: "c2", uid: u, name: db["members/" + u].name, cat, partner: "", at: now, scores: {
+    ...(s1 ? { e1: { score: String(s1), value: s1 } } : {}), ...(s2 ? { e2: { score: s2, value: Number(s2.split(":")[0]) * 60 + Number(s2.split(":")[1]) } } : {}) } }; };
+  ent("u-mikel", "RX", 95, "5:12"); ent("u-iker", "RX", 90, "4:58"); ent("u-laura", "RX", 60, "6:40"); ent("u-javier", "RX", 92.5, "6:05");
+  ent("u-irati", "Escalado", 45, "7:30"); ent("u-maite", "Escalado", 40, "7:02");
+  for (const [u, cat] of [["u-mikel", "RX"], ["u-iker", "RX"], ["u-laura", "RX"], ["u-maite", "Escalado"]]) db[`compEntries/c1__${u}`] = { compId: "c1", uid: u, name: db["members/" + u].name, cat, partner: "", at: now, scores: {} };
   db["leads/l1"] = { name: "Ainhoa Martínez", phone: "", email: "ainhoa@ejemplo.com", msg: "Nunca he hecho CrossFit, ¿puedo probar?", at: now, done: false };
   return db;
 }
