@@ -557,7 +557,7 @@ VIEWS.wod = root => {
     root.innerHTML = `<div class="h"><h2>Programación</h2><button class="btn sm" data-hist>📚 Anteriores</button></div>${modeBar()}
       <div class="row between" style="margin-bottom:10px"><button class="btn sm" id="wPrev" aria-label="Semana anterior">‹</button>
         <b>Semana del ${fmtShort(from)} al ${fmtShort(addDays(from, 6))}</b><button class="btn sm" id="wNext" aria-label="Semana siguiente">›</button></div>
-      <div class="seg" style="margin-bottom:10px">${TRACKS.map(t => `<button data-track="${t.id}" aria-pressed="${t.id === wodTrack}">${esc(t.name)} <span>${filled(t)}/7</span></button>`).join("")}</div>
+      <div class="gseg" style="margin-bottom:10px">${TRACKS.map(t => `<button data-track="${t.id}" aria-pressed="${t.id === wodTrack}">${esc(t.name)} <span>${filled(t)}/7</span></button>`).join("")}</div>
       <div class="row" style="flex-wrap:wrap;gap:8px;margin-bottom:12px"><button class="btn sm" id="wPaste">📋 Pegar la semana de golpe</button><button class="btn sm" id="wCopy">↻ Copiar de la semana pasada</button></div>
       <form id="wkf">${days.map((d, i) => `<div class="card"><div class="row between"><h3>${DAYS_L[i]} <span class="small muted" style="font-family:Inter;font-weight:500">${fmtShort(d)}</span></h3>${!slotsFor(d).length ? '<span class="chip grey">Sin clases</span>' : ""}</div>
         ${tr.id === "crossfit" ? `<div class="grid2"><label>Nombre<input data-d="${d}" data-k="title" maxlength="60" value="${esc(val(d, "title"))}" placeholder="Fran, AMRAP…"></label><label>Puntúa por<select data-d="${d}" data-k="score">${Object.entries(SCORE).map(([k, v]) => `<option value="${k}" ${(val(d, "score") || "time") === k ? "selected" : ""}>${v}</option>`).join("")}</select></label></div>` : ""}
@@ -770,6 +770,7 @@ function productDlg(id, p) {
 }
 
 /* ---------- view: CUOTA (athlete) ---------- */
+const cuotaOpen = {};
 VIEWS.cuota = root => {
   let pays = {};
   const draw = () => {
@@ -788,12 +789,12 @@ VIEWS.cuota = root => {
         ${u.extraLeft ? `<p style="margin:10px 0 0">🎟️ Te quedan <b>${u.extraLeft}</b> clases de bono.</p>` : ""}
         ${!paid ? payBtns(u.plan) : ""}${me.stripeCustomer && be.payments && !be.demo ? '<button class="btn sm ghost" id="portal" style="margin-top:8px">Cambiar tarjeta o cancelar la domiciliación</button>' : ""}
         ${!be.payments && !paid ? '<p class="small muted" style="margin-top:8px">Paga en recepción (Bizum, efectivo o transferencia) y el box lo apuntará.</p>' : ""}</div>` : ""}
-      <div class="h"><h2>${u.plan ? "Cambiar de tarifa" : "Elige tu tarifa"}</h2></div>
+      <details class="more" ${u.plan ? "" : "open"}><summary>${u.plan ? "Cambiar de tarifa" : "Elige tu tarifa"}</summary>
       ${plans().filter(p => p.id !== me.planId).map(p => `<div class="plan"><div class="grow"><b>${esc(p.name)}</b><br><span class="small muted">${p.classes == null ? "Clases ilimitadas" : p.classes ? `${p.classes} clases` : "Sin clases dirigidas"} · ${p.open == null ? "Open ilimitado" : `${p.open} Open`} al mes</span></div><span class="price">${money(p.price)}<small>/mes</small></span>${be.payments ? `<button class="btn sm" data-pick="${p.id}">Elegir</button>` : ""}</div>`).join("")}
       ${!be.payments ? '<p class="small muted">Para cambiar de tarifa, díselo al box.</p>' : ""}
-      <div class="h"><h2>Bonos</h2></div>
+      </details><details class="more"><summary>Comprar un bono de clases</summary>
       ${(box.passes || []).map(x => `<div class="plan"><div class="grow"><b>${esc(x.name)}</b><br><span class="small muted">${x.credits} ${x.credits === 1 ? "clase" : "clases"} para usar cuando quieras</span>
-        ${be.payments ? `<div style="margin-top:8px"><button class="btn sm" data-pass="${x.id}">Comprar</button></div>` : ""}</div><span class="price">${money(x.price)}</span></div>`).join("")}
+        ${be.payments ? `<div style="margin-top:8px"><button class="btn sm" data-pass="${x.id}">Comprar</button></div>` : ""}</div><span class="price">${money(x.price)}</span></div>`).join("")}</details>
       <div class="h"><h2>Mis pagos</h2></div>
       <div class="card">${hist.length ? `<div class="list">${hist.map(p => `<div class="li" style="cursor:default"><span class="grow"><span class="t">${esc(p.concept || "Cuota")}</span><br><span class="small muted">${fmtDay(p.at.slice(0, 10))} · ${esc(p.method)}</span></span><b>${money(p.amount)}</b></div>`).join("")}</div>` : '<p class="empty">Todavía no hay pagos.</p>'}</div>
       <div class="h"><h2>Mis datos</h2></div>
@@ -808,6 +809,7 @@ VIEWS.cuota = root => {
         if (r?.url) location.href = r.url; else if (r?.demo) toast("¡Pago recibido! (demo)");
       } catch (e) { console.error(e); toast("No se ha podido abrir el pago. Inténtalo más tarde."); }
     };
+    root.querySelectorAll("details.more").forEach((d, i) => { if (cuotaOpen[i]) d.open = true; d.ontoggle = () => cuotaOpen[i] = d.open; });
     root.querySelectorAll("[data-pay]").forEach(b => b.onclick = () => pay("plan", b.dataset.pay, b.dataset.per));
     root.querySelectorAll("[data-pick]").forEach(b => b.onclick = () => { const p = planOf(b.dataset.pick);
       openDlg(`<h3>${esc(p.name)}</h3><p class="muted small">Elige cómo quieres pagarla. Se renueva sola y puedes cancelarla cuando quieras.${u.plan ? " Tu tarifa actual se cancela al cambiar." : ""}</p>${payBtns(p)}<div class="dlgbtns"><button class="btn" id="pkC">Cancelar</button></div>`, d => {
@@ -898,7 +900,7 @@ VIEWS.box = root => {
   const wkStart = addDays(today(), -wdOf(today()));
   const draw = () => {
     const S2 = { resumen: "Resumen", horario: "Horario", tarifas: "Tarifas", tienda: "Tienda", avisos: "Avisos", pruebas: "Pruebas" };
-    let h = `<div class="h"><h2>El box</h2></div><div class="seg" style="margin-bottom:12px">${Object.entries(S2).map(([k, v]) => `<button data-s="${k}" aria-pressed="${boxSec === k}">${v}${k === "pruebas" && Object.values(leads).filter(l => !l.done).length ? ` <span>${Object.values(leads).filter(l => !l.done).length}</span>` : ""}</button>`).join("")}</div><div id="sec"></div>`;
+    let h = `<div class="h"><h2>El box</h2></div><div class="gseg g3" style="margin-bottom:12px">${Object.entries(S2).map(([k, v]) => `<button data-s="${k}" aria-pressed="${boxSec === k}">${v}${k === "pruebas" && Object.values(leads).filter(l => !l.done).length ? ` <span>${Object.values(leads).filter(l => !l.done).length}</span>` : ""}</button>`).join("")}</div><div id="sec"></div>`;
     root.innerHTML = h;
     root.querySelectorAll("[data-s]").forEach(b => b.onclick = () => { boxSec = b.dataset.s; draw(); });
     const sec = $("#sec");
