@@ -194,3 +194,4 @@ dialog::backdrop{background:rgba(27,13,16,.45)}
   .quota{grid-template-columns:1fr}
   .slot .time{width:54px;font-size:18px}
 }
+.wod .wodlink{background:rgba(255,255,255,.1);border-color:rgba(255,255,255,.25);color:#fff;position:relative;z-index:1}

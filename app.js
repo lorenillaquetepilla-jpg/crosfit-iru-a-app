@@ -233,7 +233,7 @@ function renderNav() {
 }
 const VIEWS = {};
 function go(tab) {
-  clearView(); S.tab = tab; renderNav();
+  clearView(); S.tab = tab; renderNav(); if (tab !== "wod") wodCopy = null;
   window.scrollTo(0, 0);
   if (S.me?.status === "baja" && !isStaff()) { view = null; $("#main").innerHTML = cara("Te echamos de menos", "Tu cuenta está dada de baja. Habla con el box si quieres volver."); return; }
   view = VIEWS[tab]($("#main"));
@@ -381,8 +381,8 @@ function ranking(results, type) {
   return Object.entries(results).map(([id, r]) => ({ id, ...r })).sort((a, b) => (b.rx ? 1 : 0) - (a.rx ? 1 : 0) || (type === "time" ? a.value - b.value : b.value - a.value));
 }
 function wodCard(date, wod) {
-  if (!wod) return `<div class="card">${cara("Sin WOD todavía", isStaff() ? "Publica el WOD de este día en la pestaña WOD." : "Los coaches aún no han publicado el WOD. ¡Paciencia!")}</div>`;
-  return `<div class="wod"><div class="k">WOD · ${fmtShort(date)}</div><h3>${esc(wod.title || "WOD")}</h3><div class="pre">${esc(wod.text)}</div></div>`;
+  if (!wod) return `<div class="card">${cara("Sin WOD todavía", isStaff() ? "Publica el WOD de este día en la pestaña WOD." : "Los coaches aún no han publicado el WOD. ¡Paciencia!")}<button class="btn sm" data-hist>📚 Ver WODs anteriores</button></div>`;
+  return `<div class="wod"><div class="row between"><div class="k">WOD · ${fmtShort(date)}</div><button class="btn sm wodlink" data-hist>📚 WODs anteriores</button></div><h3>${esc(wod.title || "WOD")}</h3><div class="pre">${esc(wod.text)}</div></div>`;
 }
 function rankingCard(date, wod, results) {
   if (!wod || wod.score === "none") return "";
@@ -393,6 +393,7 @@ function rankingCard(date, wod, results) {
       : '<p class="empty">Nadie ha apuntado su resultado todavía. ¡Sé el primero!</p>'}</div>`;
 }
 function bindRanking(root, date, wod, results) {
+  root.querySelectorAll("[data-hist]").forEach(b => b.onclick = () => go("historial"));
   root.querySelector("#logR")?.addEventListener("click", () => logResult(date, wod, results[`${date}__${S.user.uid}`]));
   root.querySelectorAll("[data-bump]").forEach(b => b.onclick = () => { const r = results[b.dataset.bump]; const on = !r.likes?.[S.user.uid];
     const likes = { ...(r.likes || {}) }; if (on) likes[S.user.uid] = true; else delete likes[S.user.uid];
@@ -499,7 +500,7 @@ VIEWS.clases = root => {
 };
 
 /* ---------- view: WOD (staff) ---------- */
-let wodDay = null;
+let wodDay = null, wodCopy = null;
 VIEWS.wod = root => {
   wodDay ||= today();
   let wod = null, results = {}, u1, u2;
@@ -508,22 +509,62 @@ VIEWS.wod = root => {
     u2 = be.watchQuery("results", [["date", "==", wodDay]], o => { results = o; draw(); }, fail); };
   viewSubs.push(() => { u1?.(); u2?.(); });
   const draw = () => {
-    root.innerHTML = `<div class="h"><h2>WOD</h2><span class="sub">${fmtDay(wodDay)}</span></div>
+    const src = wodCopy || wod;
+    root.innerHTML = `<div class="h"><h2>WOD</h2><button class="btn sm" data-hist>📚 Anteriores</button></div><p class="small muted" style="margin:-6px 0 10px">${fmtDay(wodDay)}${wodCopy ? ` · copiado de «${esc(wodCopy.title)}». Elige el día y publícalo` : ""}</p>
       ${dayPicker(wodDay, addDays(today(), -3), 11)}
       <div class="card" style="margin-top:10px"><form id="wf">
-        <label>Nombre del WOD<input id="wT" maxlength="60" value="${esc(wod?.title || "")}" placeholder="Ej.: Fran, AMRAP 20'…"></label>
-        <label>Entrenamiento<textarea id="wX" maxlength="2000" placeholder="Calentamiento, fuerza, WOD…">${esc(wod?.text || "")}</textarea></label>
-        <label>Cómo se puntúa<select id="wS">${Object.entries(SCORE).map(([k, v]) => `<option value="${k}" ${(wod?.score || "time") === k ? "selected" : ""}>${v}</option>`).join("")}</select></label>
+        <label>Nombre del WOD<input id="wT" maxlength="60" value="${esc(src?.title || "")}" placeholder="Ej.: Fran, AMRAP 20'…"></label>
+        <label>Entrenamiento<textarea id="wX" maxlength="2000" placeholder="Calentamiento, fuerza, WOD…">${esc(src?.text || "")}</textarea></label>
+        <label>Cómo se puntúa<select id="wS">${Object.entries(SCORE).map(([k, v]) => `<option value="${k}" ${(src?.score || "time") === k ? "selected" : ""}>${v}</option>`).join("")}</select></label>
         <div class="dlgbtns">${wod ? '<button type="button" class="btn danger" id="wD">Borrar</button>' : ""}<button class="btn primary">${wod ? "Guardar cambios" : "Publicar WOD"}</button></div>
       </form></div>
       ${wod ? `<div class="h"><h2>Así lo ven los atletas</h2></div>${wodCard(wodDay, wod)}${rankingCard(wodDay, wod, results)}` : ""}`;
+    root.querySelector("[data-hist]").onclick = () => { wodCopy = null; go("historial"); };
     bindDays(root, d => { wodDay = d; wod = null; results = {}; listen(); });
     $("#wD")?.addEventListener("click", async () => { if (await confirmDlg("Borrar WOD", "¿Seguro que quieres borrar el WOD de este día?", "Borrar")) safe(() => be.del("wods/" + wodDay)); });
     $("#wf").onsubmit = async ev => { ev.preventDefault(); const text = $("#wX").value.trim(); if (!text) return toast("Escribe el entrenamiento.");
-      await safe(() => be.set("wods/" + wodDay, { title: $("#wT").value.trim() || "WOD", text, score: $("#wS").value, by: S.user.uid, at: new Date().toISOString() })); $("#wX").blur(); toast("WOD publicado."); };
+      await safe(() => be.set("wods/" + wodDay, { title: $("#wT").value.trim() || "WOD", text, score: $("#wS").value, by: S.user.uid, at: new Date().toISOString() })); wodCopy = null; $("#wX").blur(); toast("WOD publicado."); };
     bindRanking(root, wodDay, wod, results);
   };
   listen();
+  return { draw };
+};
+
+/* ---------- view: HISTÓRICO DE WODs ---------- */
+let histQ = "";
+VIEWS.historial = root => {
+  let wods = {}, mine = {};
+  const back = isStaff() ? "wod" : "hoy";
+  const draw = () => {
+    const q = histQ.trim().toLowerCase();
+    const list = Object.entries(wods).filter(([d]) => d <= today()).sort((a, b) => b[0].localeCompare(a[0]))
+      .filter(([, w]) => !q || `${w.title} ${w.text}`.toLowerCase().includes(q));
+    const byMonth = {}; for (const e of list) (byMonth[monthOf(e[0])] ||= []).push(e);
+    root.innerHTML = `<div class="h"><h2>WODs anteriores</h2><button class="btn sm" id="hBack">← Volver</button></div>
+      <input class="search" id="hq" type="search" placeholder="Buscar: Fran, thrusters, burpees…" value="${esc(histQ)}">
+      <p class="small muted" style="margin-top:-2px">${Object.keys(wods).length} WODs guardados.${isStaff() ? "" : " Los que hiciste llevan tu resultado."}</p>
+      ${list.length ? Object.entries(byMonth).map(([m, es]) => `<div class="sched-day"><h4>${monthName(m)} ${m.slice(0, 4)}</h4><div class="card" style="padding-top:4px;padding-bottom:4px"><div class="list">${es.map(([d, w]) => { const r = mine[`${d}__${S.user.uid}`];
+        return `<button class="li" data-w="${d}"><span class="av">${parse(d).getDate()}</span><span class="grow" style="min-width:0"><span class="t">${esc(w.title || "WOD")}</span><br><span class="small muted" style="display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(w.text.replace(/\n+/g, " · "))}</span></span>${r ? `<span class="chip">${esc(r.score)}</span>` : ""}›</button>`; }).join("")}</div></div></div>`).join("")
+        : `<div class="card">${cara("Nada por aquí", q ? "No hay ningún WOD con esa palabra." : "Cuando se publiquen WODs se guardarán aquí.")}</div>`}`;
+    $("#hBack").onclick = () => go(back);
+    const hq = $("#hq"); hq.oninput = () => { histQ = hq.value; const pos = hq.selectionStart; draw(); const n = $("#hq"); n.focus(); n.setSelectionRange(pos, pos); };
+    root.querySelectorAll("[data-w]").forEach(b => b.onclick = () => showWod(b.dataset.w, wods[b.dataset.w]));
+  };
+  const showWod = (date, wod) => {
+    let results = {};
+    const un = be.watchQuery("results", [["date", "==", date]], o => { results = o; paint(); }, fail);
+    const onClose = () => { un(); dlg.removeEventListener("close", onClose); };
+    dlg.addEventListener("close", onClose);
+    const paint = () => openDlg(`<p class="muted small" style="margin:0 0 6px">${fmtDay(date)}</p>${wodCard(date, wod).replace(/<button class="btn sm wodlink"[^>]*>.*?<\/button>/, "")}${rankingCard(date, wod, results).replace(/<button class="btn sm[^"]*" id="logR">.*?<\/button>/, "")}
+      <div class="dlgbtns">${isStaff() ? '<button class="btn" id="hRep">Repetir este WOD…</button>' : ""}<button class="btn primary" id="hC">Cerrar</button></div>`, b => {
+      $("#hC").onclick = closeDlg;
+      bindRanking(b, date, wod, results);
+      $("#hRep")?.addEventListener("click", () => { closeDlg(); wodDay = today(); wodCopy = wod; go("wod"); });
+    });
+    paint();
+  };
+  queryV("wods", [], o => { wods = o; draw(); });
+  queryV("results", [["uid", "==", S.user.uid]], o => { mine = o; draw(); });
   return { draw };
 };
 

@@ -1,6 +1,6 @@
 // Modo demostración: mismos métodos que backend-firebase.js, con los datos guardados en este navegador.
 import { DEFAULT_BOX, DEFAULT_SCHEDULE } from "./defaults.js";
-const KEY = "cfi-demo-v1";
+const KEY = "cfi-demo-v2";
 
 const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const dayOff = n => { const d = new Date(); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() + n); return d; };
@@ -52,6 +52,14 @@ function seed() {
   db["wods/" + today] = { title: "“Caravinagre”", score: "time",
     text: "Por tiempo (cap 15'):\n21-15-9\nThrusters 43/30 kg\nPull-ups\n\nDespués: Back squat 5x5 al 75 %" };
   db["wods/" + ymd(dayOff(-1))] = { title: "AMRAP 12'", score: "rounds", text: "AMRAP 12':\n10 wall balls 9/6 kg\n10 box jumps\n10 burpees" };
+  const classics = [["Fran", "time", "21-15-9\nThrusters 43/30 kg\nPull-ups"], ["Cindy", "rounds", "AMRAP 20':\n5 pull-ups\n10 push-ups\n15 air squats"],
+    ["Grace", "time", "30 clean & jerks 61/43 kg por tiempo"], ["Helen", "time", "3 rondas:\n400 m carrera\n21 kettlebell swings 24/16 kg\n12 pull-ups"],
+    ["Karen", "time", "150 wall balls 9/6 kg por tiempo"], ["Back squat 5RM", "kg", "Back squat: busca tu 5RM\nDespués: 3x10 zancadas"],
+    ["Isabel", "time", "30 snatches 61/43 kg por tiempo"], ["Diane", "time", "21-15-9\nPeso muerto 102/70 kg\nHandstand push-ups"],
+    ["Chipper navarro", "time", "50 double unders\n40 wall balls\n30 box jumps\n20 burpees\n10 power cleans 60/40 kg"], ["Murph", "time", "1,6 km carrera\n100 pull-ups\n200 push-ups\n300 squats\n1,6 km carrera\n(con chaleco 9/6 kg)"]];
+  classics.forEach(([title, score, text], i) => { db["wods/" + ymd(dayOff(-3 - i * 3))] = { title, score, text }; });
+  db[`results/${ymd(dayOff(-3))}__demo-ana`] = { date: ymd(dayOff(-3)), uid: "demo-ana", name: "Ana Goñi", score: "5:58", value: 358, rx: false, note: "Con banda", at: now, likes: { "u-mikel": true } };
+  db[`results/${ymd(dayOff(-3))}__u-mikel`] = { date: ymd(dayOff(-3)), uid: "u-mikel", name: "Mikel Etxeberria", score: "3:41", value: 221, rx: true, note: "", at: now, likes: {} };
   const res = [["u-mikel", "6:42", 402, true], ["u-laura", "7:15", 435, true], ["u-irati", "8:03", 483, false], ["u-iker", "9:20", 560, false]];
   for (const [u, score, value, rx] of res)
     db[`results/${today}__${u}`] = { date: today, uid: u, name: db["members/" + u].name, score, value, rx, note: "", at: now, likes: { "u-laura": true } };
