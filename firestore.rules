@@ -36,7 +36,7 @@ service cloud.firestore {
         || (request.resource.data.role == 'admin' && !exists(/databases/$(database)/documents/config/setup)));
       allow update: if isAdmin()
         || (isStaff() && onlyChanges(['status']) && resource.data.role == 'athlete')
-        || (signedIn() && request.auth.uid == uid && onlyChanges(['name', 'phone']));
+        || (signedIn() && request.auth.uid == uid && onlyChanges(['name', 'phone', 'sex']));
       allow delete: if isAdmin();
     }
 
@@ -67,9 +67,15 @@ service cloud.firestore {
         || isStaff();
     }
 
-    match /prs/{uid} {
-      allow read: if (signedIn() && request.auth.uid == uid) || isStaff();
-      allow write: if signedIn() && request.auth.uid == uid;
+    // Personal records. Public ones feed the ranking and the wall; others may only give a "fist bump".
+    match /marks/{id} {
+      allow read: if (signedIn() && resource.data.uid == request.auth.uid) || (isMember() && resource.data.public == true) || isStaff();
+      allow create: if isActive() && request.resource.data.uid == request.auth.uid && request.resource.data.likes.size() == 0
+        && request.resource.data.v is number && request.resource.data.v > 0 && request.resource.data.v < 600;
+      allow update: if (isActive() && onlyChanges(['likes'])
+            && request.resource.data.likes.diff(resource.data.likes).affectedKeys().hasOnly([request.auth.uid]))
+        || (signedIn() && resource.data.uid == request.auth.uid && request.resource.data.uid == request.auth.uid);
+      allow delete: if (signedIn() && resource.data.uid == request.auth.uid) || isStaff();
     }
 
     // Payments are written by the owner (cash, Bizum…) or by the Stripe function (admin SDK, skips these rules).

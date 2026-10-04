@@ -1,6 +1,6 @@
 // Modo demostración: mismos métodos que backend-firebase.js, con los datos guardados en este navegador.
 import { DEFAULT_BOX, DEFAULT_SCHEDULE } from "./defaults.js";
-const KEY = "cfi-demo-v3";
+const KEY = "cfi-demo-v4";
 
 const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const dayOff = n => { const d = new Date(); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() + n); return d; };
@@ -67,11 +67,18 @@ function seed() {
   const res = [["u-mikel", "6:42", 402, true], ["u-laura", "7:15", 435, true], ["u-irati", "8:03", 483, false], ["u-iker", "9:20", 560, false]];
   for (const [u, score, value, rx] of res)
     db[`results/${today}__${u}`] = { date: today, uid: u, name: db["members/" + u].name, score, value, rx, note: "", at: now, likes: { "u-laura": true } };
-  db["prs/demo-ana"] = { items: {
-    "Back squat": [{ v: 65, date: ymd(dayOff(-120)) }, { v: 72.5, date: ymd(dayOff(-60)) }, { v: 80, date: ymd(dayOff(-8)) }],
-    "Clean": [{ v: 45, date: ymd(dayOff(-90)) }, { v: 50, date: ymd(dayOff(-20)) }],
-    "Peso muerto": [{ v: 95, date: ymd(dayOff(-40)) }]
-  } };
+  const sexes = { "demo-ana": "f", "u-mikel": "m", "u-irati": "f", "u-javier": "m", "u-maite": "f", "u-unai": "m", "u-laura": "f", "u-iker": "m" };
+  for (const [u, x] of Object.entries(sexes)) db["members/" + u].sex = x;
+  let mk = 0;
+  const mark = (u, lift, v, ago, extra = {}) => { db["marks/m" + (++mk)] = { uid: u, name: db["members/" + u].name, sex: sexes[u], lift, v, date: ymd(dayOff(-ago)), video: "", note: "", public: true, pr: true,
+    at: new Date(dayOff(-ago).getTime() + mk * 1000).toISOString(), likes: {}, ...extra }; };
+  mark("demo-ana", "Back squat", 65, 120); mark("demo-ana", "Back squat", 72.5, 60); mark("demo-ana", "Back squat", 80, 8, { note: "¡Por fin los 80!", likes: { "u-laura": true, "u-mikel": true } });
+  mark("demo-ana", "Clean", 45, 90); mark("demo-ana", "Clean", 50, 20); mark("demo-ana", "Peso muerto", 95, 40);
+  mark("u-laura", "Back squat", 85, 5, { note: "Rozando los 90 💪", likes: { "demo-ana": true } }); mark("u-irati", "Back squat", 70, 15); mark("u-maite", "Back squat", 62.5, 30);
+  mark("u-mikel", "Back squat", 140, 3, { note: "PR de la temporada", likes: { "u-iker": true, "u-unai": true, "demo-ana": true } }); mark("u-iker", "Back squat", 125, 12); mark("u-javier", "Back squat", 132.5, 25); mark("u-unai", "Back squat", 118, 40);
+  mark("u-mikel", "Snatch", 85, 6); mark("u-iker", "Snatch", 80, 2, { likes: { "u-mikel": true } }); mark("u-laura", "Snatch", 50, 9); mark("demo-ana", "Snatch", 42.5, 11);
+  mark("u-mikel", "Clean & jerk", 110, 18); mark("u-laura", "Clean & jerk", 65, 1, { note: "Con split jerk por primera vez" }); mark("u-irati", "Clean", 55, 4);
+  mark("u-javier", "Peso muerto", 190, 22); mark("u-mikel", "Peso muerto", 200, 35); mark("u-maite", "Peso muerto", 100, 7);
   const pay = (uid, amount, method, month, plan) => { db["payments/" + Math.random().toString(36).slice(2, 10)] = { uid, name: db["members/" + uid].name, amount, method, month, concept: plan, at: now, by: "demo-david" }; };
   pay("demo-ana", 82, "tarjeta", month, "Pack 3"); pay("u-mikel", 105, "tarjeta", month, "Ilimitada");
   pay("u-irati", 71, "bizum", month, "Pack 2"); pay("u-maite", 59, "efectivo", month, "Pack 1");
@@ -83,7 +90,7 @@ function seed() {
   prod("pr2", "Cinturón de halterofilia", "Cinturones", 36, "demo/cinturon.jpg", ["Azul", "Naranja", "Negro", "Rosa"]);
   prod("pr3", "Comba Fire 2.0", "Combas", 40, "demo/comba.jpg", ["Camuflaje", "Negro", "Plata", "Rojo"]);
   prod("pr4", "Tape No Second", "Tape", 3.5, "demo/tape.jpg", ["Azul", "Negro", "Rosa", "Verde"]);
-  db["leads/l1"] = { name: "Ainhoa Martínez", phone: "600 000 000", email: "ainhoa@ejemplo.com", msg: "Nunca he hecho CrossFit, ¿puedo probar?", at: now, done: false };
+  db["leads/l1"] = { name: "Ainhoa Martínez", phone: "", email: "ainhoa@ejemplo.com", msg: "Nunca he hecho CrossFit, ¿puedo probar?", at: now, done: false };
   return db;
 }
 

@@ -154,7 +154,7 @@ function renderLogin(mode = "in") {
       ${DEMO ? `<hr><p class="small muted">Modo demostración. Prueba con <b>ana@demo</b> (atleta), <b>ivan@demo</b> (coach) o <b>david@demo</b> (dueño). Contraseña: <b>demo</b>.</p>
         <div class="row"><button class="btn sm" data-demo="ana@demo">Entrar como Ana</button><button class="btn sm" data-demo="ivan@demo">Como Iván</button><button class="btn sm" data-demo="david@demo">Como David</button></div>` : ""}
     </div>
-    <div class="card"><h3>¿Quieres probar?</h3><p class="muted small">Déjanos tus datos y te llamamos para tu clase de prueba gratis.</p>
+    <div class="card"><h3>¿Quieres probar?</h3><p class="muted small">Déjanos tu correo y te escribimos para tu clase de prueba gratis.</p>
       <button class="btn block" id="trial">Pedir clase de prueba</button></div>
   </div>`;
   m.querySelectorAll("[data-m]").forEach(b => b.onclick = () => renderLogin(b.dataset.m));
@@ -180,10 +180,9 @@ function renderLogin(mode = "in") {
 }
 
 function trialForm() {
-  openDlg(`<h3>Clase de prueba</h3><p class="muted small">Gratis y sin compromiso. Te contactamos para elegir el día.</p>
+  openDlg(`<h3>Clase de prueba</h3><p class="muted small">Gratis y sin compromiso. Te escribimos por correo para elegir el día.</p>
     <form id="tf"><label>Nombre<input id="tN" required maxlength="80"></label>
-    <label>Teléfono<input id="tP" type="tel" required maxlength="20"></label>
-    <label>Correo (opcional)<input id="tE" type="email" maxlength="120"></label>
+    <label>Correo electrónico<input id="tE" type="email" required maxlength="120" autocomplete="email"></label>
     <label>¿Algo que debamos saber? (opcional)<textarea id="tM" maxlength="500" style="min-height:70px"></textarea></label>
     <div class="err" id="tErr"></div>
     <div class="dlgbtns"><button type="button" class="btn" id="tC">Cancelar</button><button class="btn primary">Enviar</button></div></form>`, b => {
@@ -191,8 +190,8 @@ function trialForm() {
     $("#tf").onsubmit = async ev => {
       ev.preventDefault();
       try {
-        await be.add("leads", { name: $("#tN").value.trim(), phone: $("#tP").value.trim(), email: $("#tE").value.trim(), msg: $("#tM").value.trim(), at: new Date().toISOString(), done: false });
-        closeDlg(); toast("¡Recibido! Te llamaremos muy pronto.");
+        await be.add("leads", { name: $("#tN").value.trim(), phone: "", email: $("#tE").value.trim(), msg: $("#tM").value.trim(), at: new Date().toISOString(), done: false });
+        closeDlg(); toast("¡Recibido! Te escribiremos al correo muy pronto.");
       } catch (e) { $("#tErr").textContent = "No se ha podido enviar. Inténtalo otra vez."; }
     };
   });
@@ -224,7 +223,7 @@ async function renderJoin() {
 function tabs() {
   if (isAdmin()) return [["hoy","Hoy"],["clases","Clases"],["wod","WOD"],["socios","Socios"],["box","Box"]].map(([id,l]) => ({id,l}));
   if (isStaff()) return [["hoy","Hoy"],["clases","Clases"],["wod","WOD"],["socios","Socios"],["tienda","Tienda"]].map(([id,l]) => ({id,l}));
-  return [["hoy","Hoy"],["clases","Clases"],["marcas","Marcas"],["tienda","Tienda"],["cuota","Cuota"]].map(([id,l]) => ({id,l}));
+  return [["hoy","Hoy"],["clases","Clases"],["marcas","Mi panel"],["tienda","Tienda"],["cuota","Cuota"]].map(([id,l]) => ({id,l}));
 }
 function renderNav() {
   const n = $("#nav"); n.hidden = false;
@@ -266,6 +265,7 @@ const limitTxt = (used, max) => max == null ? `${used} · ilimitadas` : `${used}
 async function book(date, slot, list) {
   const me = S.me;
   if (me.status !== "active") return toast("Tu alta está pendiente. El box tiene que asignarte una tarifa.");
+  if (!isOpenToBook(date)) return toast(`Las reservas de esta clase se abren el ${fmtDay(ymd(opensAt(date))).toLowerCase()} a las ${S.box.openTime || "21:00"}.`);
   const month = monthOf(date);
   const u = usage(month);
   const max = isOpenType(slot.type) ? u.openMax : u.clsMax;
@@ -300,6 +300,10 @@ async function cancelBooking(date, slot, bookingId, list, byStaff = false) {
   toast("Reserva cancelada.");
 }
 
+// A class on day D can be booked from (D - openDays) at openTime.
+function opensAt(date) { const d = startsAt(addDays(date, -(S.box.openDays ?? 2)), S.box.openTime || "21:00"); return d; }
+const isOpenToBook = date => Date.now() >= opensAt(date).getTime();
+const opensTxt = date => { const o = opensAt(date); return `Abre ${DAYS[(o.getDay() + 6) % 7].toLowerCase()} ${S.box.openTime || "21:00"}`; };
 function slotRow(date, slot, bookings, { staff = false } = {}) {
   const list = splitList(bookings, slot), t = typeOf(slot.type), cap = slot.cap || 99;
   const mine = Object.entries(bookings).find(([, b]) => b.slotId === slot.id && b.uid === S.user.uid);
@@ -311,6 +315,7 @@ function slotRow(date, slot, bookings, { staff = false } = {}) {
   if (!staff) {
     if (off) action = '<span class="chip bad">Cancelada</span>';
     else if (mine) action = `<button class="btn sm ${myWait ? "" : "primary"}" data-cancel="${slot.id}">${myWait ? `En espera ${list.wait.findIndex(b => b.id === mine[0]) + 1}º · Salir` : "✓ Reservado"}</button>`;
+    else if (!past && !isOpenToBook(date)) action = `<span class="chip grey">${opensTxt(date)}</span>`;
     else if (!past) action = `<button class="btn sm" data-book="${slot.id}">${full ? "Lista de espera" : "Reservar"}</button>`;
   } else {
     action = `<button class="btn sm" data-manage="${slot.id}">Gestionar</button>`;
@@ -436,7 +441,7 @@ VIEWS.hoy = root => {
       root.innerHTML = `${cara(`¡Egun on, ${firstName(S.me.name)}!`, `Hoy hay <b>${booked}</b> ${booked === 1 ? "reserva" : "reservas"} en ${slots.length} ${slots.length === 1 ? "clase" : "clases"}.`)}
         ${pend || leads || (isAdmin() && unpaid) ? `<div class="card"><h3>Pendiente</h3><div class="stack">
           ${pend ? `<button class="btn block" data-go="socios">👋 ${pend} ${pend === 1 ? "alta nueva" : "altas nuevas"} por revisar</button>` : ""}
-          ${leads && isAdmin() ? `<button class="btn block" data-go="box" data-sec="pruebas">📞 ${leads} ${leads === 1 ? "persona quiere" : "personas quieren"} clase de prueba</button>` : ""}
+          ${leads && isAdmin() ? `<button class="btn block" data-go="box" data-sec="pruebas">✉️ ${leads} ${leads === 1 ? "persona quiere" : "personas quieren"} clase de prueba</button>` : ""}
           ${unpaid && isAdmin() ? `<button class="btn block" data-go="socios" data-f="impago">💶 ${unpaid} con la cuota de ${monthName(thisMonth())} pendiente</button>` : ""}
         </div></div>` : ""}
         <div class="h"><h2>Clases de hoy</h2><span class="sub">Toca un nombre para marcar que ha venido</span></div>
@@ -488,13 +493,13 @@ VIEWS.clases = root => {
   viewSubs.push(() => unsub?.());
   const draw = () => {
     const slots = slotsFor(clasesDay), staff = isStaff();
-    const days = staff ? 14 : (S.box.bookDays ?? 7) + 1;
+    const days = staff ? 14 : (S.box.openDays ?? 2) + 1;
     const from = staff ? addDays(today(), -3) : today();
     root.innerHTML = `<div class="h"><h2>Clases</h2><span class="sub">${fmtDay(clasesDay)}</span></div>
       ${dayPicker(clasesDay, from, days)}
       ${S.sched?.off?.[clasesDay] ? `<div class="card">${cara("Box cerrado", "Este día no hay clases.")}</div>` : ""}
       <div class="card" style="margin-top:10px">${slots.map(s => slotRow(clasesDay, s, bookings, { staff })).join("") || '<p class="empty">Este día no hay clases.</p>'}</div>
-      ${!staff ? `<p class="small muted">Puedes cancelar hasta ${S.box.cancelHours ?? 2} h antes. Si la clase está llena, apúntate a la lista de espera: si alguien cancela, entras tú.</p>` : ""}`;
+      ${!staff ? `<p class="small muted">Las reservas se abren ${S.box.openDays ?? 2} días antes a las ${esc(S.box.openTime || "21:00")}. Puedes cancelar hasta ${S.box.cancelHours ?? 2} h antes. Si la clase está llena, apúntate a la lista de espera: si alguien cancela, entras tú.</p>` : ""}`;
     bindDays(root, d => { clasesDay = d; listen(); draw(); });
     bindSlots(root, clasesDay, bookings, slots);
   };
@@ -676,45 +681,127 @@ VIEWS.historial = root => {
   return { draw };
 };
 
-/* ---------- view: MARCAS ---------- */
+/* ---------- view: PANEL DEL ATLETA (marcas, ranking, muro) ---------- */
+let panelSec = "marcas", rankLift = "Back squat", rankSex = "";
+const ytId = u => { const m = String(u || "").match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|embed\/|live\/))([\w-]{11})/); return m ? m[1] : null; };
+const cleanUrl = u => { u = String(u || "").trim(); return /^https:\/\/[^\s"'<>]+$/.test(u) ? u : ""; };
+function videoBox(url) {
+  const u = cleanUrl(url); if (!u) return "";
+  const id = ytId(u);
+  return `<a class="vid" href="${esc(u)}" target="_blank" rel="noopener">${id ? `<img src="https://img.youtube.com/vi/${id}/mqdefault.jpg" alt="" loading="lazy" onerror="this.remove()">` : ""}<span>▶ Ver vídeo</span></a>`;
+}
+function bestBy(marks) {
+  const o = {};
+  for (const [id, m] of Object.entries(marks)) if (!o[m.uid] || m.v > o[m.uid].v || (m.v === o[m.uid].v && m.date < o[m.uid].date)) o[m.uid] = { id, ...m };
+  return Object.values(o).sort((a, b) => b.v - a.v || a.date.localeCompare(b.date));
+}
+function streakWeeks(mine) {
+  const weeks = new Set(Object.values(mine).filter(b => !b.wait && b.date <= today()).map(b => addDays(b.date, -wdOf(b.date))));
+  let n = 0, w = addDays(today(), -wdOf(today()));
+  if (!weeks.has(w)) w = addDays(w, -7);  // this week may not have started yet
+  while (weeks.has(w)) { n++; w = addDays(w, -7); }
+  return n;
+}
+
 VIEWS.marcas = root => {
-  let prs = null, myRes = {};
-  const best = arr => arr?.length ? Math.max(...arr.map(x => x.v)) : null;
+  let mine = {}, pub = {}, monthB = {}, myRes = {};
   const draw = () => {
-    const items = prs?.items || {};
-    const names = [...new Set([...LIFTS, ...Object.keys(items)])];
-    const res = Object.values(myRes).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 15);
-    root.innerHTML = `<div class="h"><h2>Mis marcas</h2><button class="btn sm" id="newL">+ Otro ejercicio</button></div>
-      <div class="card"><div class="list">${names.map(n => { const b = best(items[n]); return `<div class="pr" data-l="${esc(n)}"><span class="grow"><b>${esc(n)}</b><br><span class="small muted">${items[n]?.length ? `Última: ${fmtShort(items[n].slice().sort((a, b) => b.date.localeCompare(a.date))[0].date)}` : "Toca para apuntar tu marca"}</span></span><span class="kg">${b != null ? `${b.toLocaleString("es-ES")} <small class="small muted">kg</small>` : "—"}</span></div>`; }).join("")}</div></div>
-      <div class="h"><h2>Mis WODs</h2></div>
-      <div class="card">${res.length ? `<div class="list">${res.map(r => `<div class="li" style="cursor:default"><span class="grow"><span class="t">${esc(r.score)}</span> ${r.rx ? '<span class="chip">RX</span>' : ""}<br><span class="small muted">${fmtDay(r.date)}${r.note ? " · " + esc(r.note) : ""}</span></span><span class="small">👊 ${Object.keys(r.likes || {}).length}</span></div>`).join("")}</div>` : '<p class="empty">Cuando apuntes resultados de WODs aparecerán aquí.</p>'}</div>`;
+    const me = S.me, myBest = {};
+    for (const m of Object.values(mine)) if (!myBest[m.lift] || m.v > myBest[m.lift].v) myBest[m.lift] = m;
+    const prsMonth = Object.values(mine).filter(m => monthOf(m.date) === thisMonth() && m.pr).length;
+    const cls = Object.values(S.myBookings).filter(b => !b.wait && b.date <= today() && monthOf(b.date) === thisMonth()).length;
+    const head = `<div class="card me-card"><div class="row"><span class="av big">${initials(me.name)}</span><div class="grow"><h3 style="margin:0">${esc(me.name)}</h3><span class="small muted">${esc(planOf(me.planId)?.name || "Atleta")} · CrossFit Iruña</span></div></div>
+      <div class="mstats"><div><b>${cls}</b><span>clases en ${monthName(thisMonth())}</span></div><div><b>${streakWeeks(S.myBookings)}</b><span>semanas seguidas</span></div><div><b>${prsMonth}</b><span>PRs este mes</span></div></div></div>
+      <div class="tabs2"><button data-ps="marcas" aria-pressed="${panelSec === "marcas"}">Mis marcas</button><button data-ps="ranking" aria-pressed="${panelSec === "ranking"}">Ranking</button><button data-ps="muro" aria-pressed="${panelSec === "muro"}">Muro</button></div>`;
+    let body = "";
+    if (panelSec === "marcas") {
+      const names = [...new Set([...LIFTS, ...Object.keys(myBest)])];
+      const res = Object.values(myRes).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 10);
+      body = `<button class="btn primary block" id="newPR" style="margin-bottom:12px">＋ Apuntar una marca</button>
+        <div class="card"><div class="list">${names.map(n => { const b = myBest[n]; return `<div class="pr" data-l="${esc(n)}"><span class="grow"><b>${esc(n)}</b><br><span class="small muted">${b ? `${fmtShort(b.date)}${b.video ? " · 🎥 con vídeo" : ""}` : "Toca para apuntar tu marca"}</span></span><span class="kg">${b ? `${b.v.toLocaleString("es-ES")} <small class="small muted">kg</small>` : "—"}</span></div>`; }).join("")}</div>
+        <button class="btn sm ghost" id="newL" style="margin-top:6px">+ Otro ejercicio</button></div>
+        <div class="h"><h2>Mis WODs</h2><a href="#" class="small" data-go="historial">Ver todos</a></div>
+        <div class="card">${res.length ? `<div class="list">${res.map(r => `<div class="li" style="cursor:default"><span class="grow"><span class="t">${esc(r.score)}</span> ${r.rx ? '<span class="chip">RX</span>' : ""}<br><span class="small muted">${fmtDay(r.date)}${r.note ? " · " + esc(r.note) : ""}</span></span><span class="small">👊 ${Object.keys(r.likes || {}).length}</span></div>`).join("")}</div>` : '<p class="empty">Cuando apuntes resultados de WODs aparecerán aquí.</p>'}</div>`;
+    }
+    if (panelSec === "ranking") {
+      const lifts = [...new Set([...LIFTS, ...Object.values(pub).map(m => m.lift)])];
+      const list = bestBy(Object.fromEntries(Object.entries(pub).filter(([, m]) => m.lift === rankLift && (!rankSex || m.sex === rankSex))));
+      const myPos = list.findIndex(m => m.uid === S.user.uid);
+      const att = {}; for (const b of Object.values(monthB)) if (!b.wait && b.date <= today()) { (att[b.uid] ||= { n: 0, name: b.name }).n++; }
+      const attList = Object.entries(att).sort((a, b) => b[1].n - a[1].n).slice(0, 10);
+      body = `<div class="card"><div class="grid2"><label style="margin-top:0">Ejercicio<select id="rkL">${lifts.map(l => `<option ${l === rankLift ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
+          <label style="margin-top:0">Categoría<select id="rkS"><option value="">Todos</option><option value="f" ${rankSex === "f" ? "selected" : ""}>Chicas</option><option value="m" ${rankSex === "m" ? "selected" : ""}>Chicos</option></select></label></div>
+        ${myPos >= 0 ? `<p class="small" style="margin:10px 0 0">Vas <b>${myPos + 1}º</b> de ${list.length} en ${esc(rankLift)}.${myPos > 0 ? ` Te faltan <b>${(list[myPos - 1].v - list[myPos].v).toLocaleString("es-ES")} kg</b> para pasar a ${esc(firstName(list[myPos - 1].name))}. 😈` : " ¡Mandas tú! 👑"}</p>` : `<p class="small muted" style="margin:10px 0 0">Apunta tu marca de ${esc(rankLift)} para entrar en el ranking.</p>`}
+        ${list.length ? `<ol class="rank" style="margin-top:8px">${list.map((m, i) => `<li class="${m.uid === S.user.uid ? "mine" : ""}"><span class="pos">${i < 3 ? ["🥇", "🥈", "🥉"][i] : i + 1}</span><span class="grow"><b>${esc(m.name)}</b><br><span class="small muted">${fmtShort(m.date)}</span></span>${cleanUrl(m.video) ? `<a class="bump" href="${esc(cleanUrl(m.video))}" target="_blank" rel="noopener" title="Ver vídeo">▶</a>` : ""}<span class="sc">${m.v.toLocaleString("es-ES")} kg</span></li>`).join("")}</ol>` : '<p class="empty">Nadie ha publicado esta marca todavía.</p>'}</div>
+        <div class="h"><h2>Los más constantes</h2><span class="sub">clases en ${monthName(thisMonth())}</span></div>
+        <div class="card">${attList.length ? `<ol class="rank">${attList.map(([uid, a], i) => `<li class="${uid === S.user.uid ? "mine" : ""}"><span class="pos">${i < 3 ? ["🥇", "🥈", "🥉"][i] : i + 1}</span><span class="grow"><b>${esc(a.name)}</b></span><span class="sc">${a.n}</span></li>`).join("")}</ol>` : '<p class="empty">Aún no hay clases este mes.</p>'}</div>
+        ${!me.sex ? `<p class="small muted">Para salir en la categoría de chicas o chicos, elígela en Cuota → Mis datos.</p>` : ""}`;
+    }
+    if (panelSec === "muro") {
+      const feed = Object.entries(pub).sort((a, b) => b[1].at.localeCompare(a[1].at)).slice(0, 40);
+      body = `<p class="small muted" style="margin:0 0 10px">Las marcas que publica la gente del box. ¡Choca esos cinco!</p>
+        ${feed.length ? feed.map(([id, m]) => `<div class="card post"><div class="row"><span class="av">${initials(m.name)}</span><div class="grow"><b>${esc(m.name)}</b><br><span class="small muted">${fmtDay(m.date)}</span></div>${m.pr ? '<span class="chip ok">¡PR!</span>' : ""}</div>
+          <div class="postbody"><span class="kg">${m.v.toLocaleString("es-ES")} kg</span> <span>${esc(m.lift)}</span></div>
+          ${m.note ? `<p style="margin:6px 0 0">${esc(m.note)}</p>` : ""}${videoBox(m.video)}
+          <div class="row" style="margin-top:10px"><button class="bump" data-like="${id}" aria-pressed="${!!m.likes?.[S.user.uid]}" ${m.uid === S.user.uid ? "disabled" : ""}>👊 ${Object.keys(m.likes || {}).length || ""}</button></div></div>`).join("")
+          : `<div class="card">${cara("Muro vacío", "Sé el primero: apunta una marca y publícala.")}</div>`}`;
+    }
+    root.innerHTML = `<div class="h"><h2>Mi panel</h2></div>${head}${body}`;
+    root.querySelectorAll("[data-ps]").forEach(b => b.onclick = () => { panelSec = b.dataset.ps; draw(); });
+    root.querySelectorAll("[data-go]").forEach(b => b.onclick = e => { e.preventDefault(); go(b.dataset.go); });
     root.querySelectorAll("[data-l]").forEach(b => b.onclick = () => liftDlg(b.dataset.l));
-    $("#newL").onclick = () => openDlg(`<h3>Nuevo ejercicio</h3><form id="nf"><label>Nombre<input id="nN" required maxlength="40" placeholder="Ej.: Overhead squat"></label><div class="dlgbtns"><button type="button" class="btn" id="nC">Cancelar</button><button class="btn primary">Seguir</button></div></form>`, () => {
-      $("#nC").onclick = closeDlg; $("#nf").onsubmit = e => { e.preventDefault(); liftDlg($("#nN").value.trim()); }; });
+    $("#newPR")?.addEventListener("click", () => markForm());
+    $("#newL")?.addEventListener("click", () => openDlg(`<h3>Nuevo ejercicio</h3><form id="nf"><label>Nombre<input id="nN" required maxlength="40" placeholder="Ej.: Overhead squat"></label><div class="dlgbtns"><button type="button" class="btn" id="nC">Cancelar</button><button class="btn primary">Seguir</button></div></form>`, () => {
+      $("#nC").onclick = closeDlg; $("#nf").onsubmit = e => { e.preventDefault(); markForm($("#nN").value.trim()); }; }));
+    $("#rkL")?.addEventListener("change", e => { rankLift = e.target.value; draw(); });
+    $("#rkS")?.addEventListener("change", e => { rankSex = e.target.value; draw(); });
+    root.querySelectorAll("[data-like]").forEach(b => b.onclick = () => { const m = pub[b.dataset.like]; const likes = { ...(m.likes || {}) };
+      if (likes[S.user.uid]) delete likes[S.user.uid]; else likes[S.user.uid] = true; safe(() => be.set("marks/" + b.dataset.like, { ...m, likes })); });
+  };
+  const markForm = (lift = LIFTS[0]) => {
+    const lifts = [...new Set([...LIFTS, ...Object.values(mine).map(m => m.lift), lift])];
+    openDlg(`<h3>Nueva marca</h3><form id="mkf">
+      <label>Ejercicio<select id="kL">${lifts.map(l => `<option ${l === lift ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
+      <div class="grid2"><label>Kilos<input id="kV" type="number" step="0.5" min="1" max="500" required inputmode="decimal"></label><label>Fecha<input id="kD" type="date" value="${today()}" max="${today()}" required></label></div>
+      <label>Vídeo (opcional)<input id="kY" type="url" maxlength="300" placeholder="Pega el enlace de YouTube"></label>
+      <label>Comentario (opcional)<input id="kN" maxlength="140" placeholder="Ej.: ¡Por fin!"></label>
+      <label class="check"><input type="checkbox" id="kP" checked> Publicar en el muro y en el ranking</label>
+      <div class="err" id="kE"></div>
+      <div class="dlgbtns"><button type="button" class="btn" id="kC">Cancelar</button><button class="btn primary">Guardar marca</button></div></form>`, () => {
+      $("#kC").onclick = closeDlg;
+      $("#mkf").onsubmit = async e => { e.preventDefault();
+        const l = $("#kL").value, v = parseFloat($("#kV").value), video = $("#kY").value.trim();
+        if (video && !cleanUrl(video)) { $("#kE").textContent = "El enlace del vídeo tiene que empezar por https://"; return; }
+        const prev = Object.values(mine).filter(m => m.lift === l), pr = !prev.length || v > Math.max(...prev.map(m => m.v));
+        await safe(() => be.add("marks", { uid: S.user.uid, name: S.me.name, sex: S.me.sex || "", lift: l, v, date: $("#kD").value, video: cleanUrl(video), note: $("#kN").value.trim(), public: $("#kP").checked, pr, at: new Date().toISOString(), likes: {} }));
+        closeDlg(); toast(pr ? "🎉 ¡Nueva marca personal!" : "Marca apuntada.");
+      };
+    });
   };
   const liftDlg = name => {
-    const arr = (prs?.items?.[name] || []).slice().sort((a, b) => a.date.localeCompare(b.date));
-    const b = best(arr);
+    const arr = Object.entries(mine).filter(([, m]) => m.lift === name).map(([id, m]) => ({ id, ...m })).sort((a, b) => a.date.localeCompare(b.date));
+    if (!arr.length) return markForm(name);
+    const b = Math.max(...arr.map(x => x.v));
     const spark = () => {
       if (arr.length < 2) return "";
       const vs = arr.map(x => x.v), mn = Math.min(...vs), mx = Math.max(...vs), W = 300, H = 70, P = 6;
       const pts = arr.map((x, i) => [P + i * (W - 2 * P) / (arr.length - 1), H - P - (mx === mn ? .5 : (x.v - mn) / (mx - mn)) * (H - 2 * P)]);
       return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><polyline points="${pts.map(p => p.join(",")).join(" ")}" fill="none" stroke="#4A1019" stroke-width="2.5" vector-effect="non-scaling-stroke"/>${pts.map(p => `<circle cx="${p[0]}" cy="${p[1]}" r="3.5" fill="#4A1019"/>`).join("")}</svg>`;
     };
-    openDlg(`<h3>${esc(name)}</h3>${b != null ? `<p class="muted">Tu mejor marca: <b style="color:var(--brand)">${b} kg</b></p>
-      <div class="pct">${[50, 60, 65, 70, 75, 80, 85, 90].map(p => `<div><b>${Math.round(b * p / 100 * 2) / 2}</b>${p} %</div>`).join("")}</div>${spark()}` : '<p class="muted">Aún no has apuntado ninguna marca.</p>'}
-      <form id="lf"><div class="grid2"><label>Kilos<input id="lV" type="number" step="0.5" min="1" required inputmode="decimal"></label><label>Fecha<input id="lD" type="date" value="${today()}" max="${today()}" required></label></div>
-      <button class="btn primary block" style="margin-top:10px">Apuntar marca</button></form>
-      ${arr.length ? `<label>Historial</label><div class="list">${arr.slice().reverse().map((x, i) => `<div class="li" style="cursor:default"><span class="grow">${fmtDay(x.date)}</span><b>${x.v} kg</b><button class="btn sm danger" data-del="${arr.length - 1 - i}" aria-label="Borrar">✕</button></div>`).join("")}</div>` : ""}
-      <div class="dlgbtns"><button class="btn" id="lC">Cerrar</button></div>`, root2 => {
+    openDlg(`<h3>${esc(name)}</h3><p class="muted">Tu mejor marca: <b style="color:var(--brand)">${b} kg</b></p>
+      <div class="pct">${[50, 60, 65, 70, 75, 80, 85, 90].map(p => `<div><b>${Math.round(b * p / 100 * 2) / 2}</b>${p} %</div>`).join("")}</div>${spark()}
+      <button class="btn primary block" id="lAdd" style="margin-top:12px">＋ Apuntar nueva marca</button>
+      <label>Historial</label><div class="list">${arr.slice().reverse().map(x => `<div class="li" style="cursor:default"><span class="grow">${fmtDay(x.date)}${x.public ? "" : ' <span class="chip grey">privada</span>'}${cleanUrl(x.video) ? ` · <a href="${esc(cleanUrl(x.video))}" target="_blank" rel="noopener">vídeo</a>` : ""}</span><b>${x.v} kg</b><button class="btn sm danger" data-del="${x.id}" aria-label="Borrar">✕</button></div>`).join("")}</div>
+      <div class="dlgbtns"><button class="btn" id="lC">Cerrar</button></div>`, r2 => {
       $("#lC").onclick = closeDlg;
-      const save = async list => { await safe(() => be.merge("prs/" + S.user.uid, { items: { ...(prs?.items || {}), [name]: list } })); prs = { items: { ...(prs?.items || {}), [name]: list } }; liftDlg(name); };
-      $("#lf").onsubmit = e => { e.preventDefault(); const v = parseFloat($("#lV").value); const nb = b == null || v > b; save([...arr, { v, date: $("#lD").value }]).then(() => toast(nb ? "🎉 ¡Nueva marca personal!" : "Marca apuntada.")); };
-      root2.querySelectorAll("[data-del]").forEach(x => x.onclick = () => save(arr.filter((_, i) => i !== Number(x.dataset.del))));
+      $("#lAdd").onclick = () => markForm(name);
+      r2.querySelectorAll("[data-del]").forEach(x => x.onclick = async () => { await safe(() => be.del("marks/" + x.dataset.del)); delete mine[x.dataset.del]; liftDlg(name); });
     });
   };
-  watchV("prs/" + S.user.uid, p => { prs = p; if (!dlg.open) draw(); });
-  queryV("results", [["uid", "==", S.user.uid]], o => { myRes = o; draw(); });
+  queryV("marks", [["uid", "==", S.user.uid]], o => { mine = o; if (!dlg.open) draw(); });
+  queryV("marks", [["public", "==", true]], o => { pub = o; if (!dlg.open) draw(); });
+  queryV("bookings", [["date", ">=", thisMonth() + "-01"]], o => { monthB = o; if (panelSec === "ranking" && !dlg.open) draw(); });
+  queryV("results", [["uid", "==", S.user.uid]], o => { myRes = o; if (!dlg.open) draw(); });
   return { draw };
 };
 
@@ -799,6 +886,7 @@ VIEWS.cuota = root => {
       <div class="card">${hist.length ? `<div class="list">${hist.map(p => `<div class="li" style="cursor:default"><span class="grow"><span class="t">${esc(p.concept || "Cuota")}</span><br><span class="small muted">${fmtDay(p.at.slice(0, 10))} · ${esc(p.method)}</span></span><b>${money(p.amount)}</b></div>`).join("")}</div>` : '<p class="empty">Todavía no hay pagos.</p>'}</div>
       <div class="h"><h2>Mis datos</h2></div>
       <div class="card"><form id="mf"><label>Nombre<input id="mN" value="${esc(me.name)}" required maxlength="80"></label><label>Teléfono<input id="mP" type="tel" value="${esc(me.phone || "")}" maxlength="20"></label>
+        <label>Categoría en los rankings<select id="mX"><option value="">Sin categoría</option><option value="f" ${me.sex === "f" ? "selected" : ""}>Chicas</option><option value="m" ${me.sex === "m" ? "selected" : ""}>Chicos</option></select></label>
         <p class="small muted">Correo: ${esc(S.user.email)}</p><button class="btn">Guardar mis datos</button></form></div>`;
     const pay = async (kind, id, period) => {
       const what = kind === "plan" ? planOf(id)?.name : box.passes.find(x => x.id === id)?.name;
@@ -816,7 +904,7 @@ VIEWS.cuota = root => {
         $("#pkC").onclick = closeDlg; d.querySelectorAll("[data-pay]").forEach(x => x.onclick = () => { closeDlg(); setTimeout(() => pay("plan", x.dataset.pay, x.dataset.per), 50); }); }); });
     root.querySelectorAll("[data-pass]").forEach(b => b.onclick = () => pay("pass", b.dataset.pass));
     $("#portal")?.addEventListener("click", async () => { try { const r = await be.call("portal", { back: location.origin + location.pathname }); if (r?.url) location.href = r.url; } catch (e) { toast("No se ha podido abrir."); } });
-    $("#mf").onsubmit = e => { e.preventDefault(); safe(() => be.merge("members/" + S.user.uid, { name: $("#mN").value.trim(), phone: $("#mP").value.trim() })).then(() => toast("Datos guardados.")); };
+    $("#mf").onsubmit = e => { e.preventDefault(); safe(() => be.merge("members/" + S.user.uid, { name: $("#mN").value.trim(), phone: $("#mP").value.trim(), sex: $("#mX").value })).then(() => toast("Datos guardados.")); };
   };
   queryV("payments", [["uid", "==", S.user.uid]], o => { pays = o; draw(); });
   return { draw };
@@ -965,7 +1053,9 @@ VIEWS.box = root => {
         <div class="card"><h3>Bonos</h3><div id="ps">${(box.passes || []).map((x, i) => `<div class="plan" data-j="${i}" style="display:block"><div class="grid2"><label>Nombre<input data-k="name" value="${esc(x.name)}" required></label><label>Precio (€)<input data-k="price" type="number" step="0.01" min="0" value="${x.price}" required></label></div><label>Clases que incluye<input data-k="credits" type="number" min="1" value="${x.credits}" required></label></div>`).join("")}</div></div>
         <div class="card"><h3>Normas</h3>
           <div class="grid2"><label>Descuento 6 meses (%)<input id="dS" type="number" min="0" max="50" value="${box.discounts?.semester ?? 0}"></label><label>Descuento anual (%)<input id="dY" type="number" min="0" max="50" value="${box.discounts?.year ?? 0}"></label></div>
-          <div class="grid2"><label>Cancelar hasta (horas antes)<input id="cH" type="number" min="0" max="48" value="${box.cancelHours ?? 2}"></label><label>Reservar con (días de antelación)<input id="bD" type="number" min="1" max="30" value="${box.bookDays ?? 7}"></label></div>
+          <label>Cancelar hasta (horas antes)<input id="cH" type="number" min="0" max="48" value="${box.cancelHours ?? 2}"></label>
+          <div class="grid2"><label>Las reservas se abren (días antes)<input id="oD" type="number" min="0" max="30" value="${box.openDays ?? 2}"></label><label>a las<input id="oT" type="time" step="300" value="${box.openTime || "21:00"}"></label></div>
+          <p class="small muted" style="margin:4px 0 0">Ahora: la clase del miércoles se puede reservar desde el lunes a las ${esc(box.openTime || "21:00")}.</p>
           <label class="check" style="margin-top:12px"><input type="checkbox" id="bU" ${box.blockUnpaid !== false ? "checked" : ""}> No dejar reservar si la cuota del mes está sin pagar</label></div>
         <button class="btn primary block">Guardar tarifas y normas</button></form>`;
       const collect = () => ({
@@ -978,7 +1068,7 @@ VIEWS.box = root => {
         if (n) return toast(`${n} socios tienen esta tarifa. Cámbiales la tarifa antes de quitarla.`);
         const c = collect(); c.plans.splice(Number(b.dataset.rmp), 1); S.box = { ...box, plans: c.plans }; SECS.tarifas(sec); });
       $("#tf").onsubmit = async e => { e.preventDefault(); const c = collect();
-        await safe(() => be.merge("config/box", { ...c, discounts: { semester: Number($("#dS").value) || 0, year: Number($("#dY").value) || 0 }, cancelHours: Number($("#cH").value), bookDays: Number($("#bD").value), blockUnpaid: $("#bU").checked }));
+        await safe(() => be.merge("config/box", { ...c, discounts: { semester: Number($("#dS").value) || 0, year: Number($("#dY").value) || 0 }, cancelHours: Number($("#cH").value), openDays: Number($("#oD").value), openTime: $("#oT").value || "21:00", blockUnpaid: $("#bU").checked }));
         document.activeElement?.blur(); toast("Tarifas guardadas."); };
     },
     avisos(sec) {
@@ -992,7 +1082,7 @@ VIEWS.box = root => {
       const list = Object.entries(leads).sort((a, b) => (a[1].done ? 1 : 0) - (b[1].done ? 1 : 0) || b[1].at.localeCompare(a[1].at));
       sec.innerHTML = `<div class="card"><h3>Clases de prueba pedidas</h3><p class="small muted">Llegan desde la pantalla de entrada de la app. Comparte el enlace de la app en Instagram para conseguir más.</p>
         ${list.length ? `<div class="list">${list.map(([id, l]) => `<div class="li" style="cursor:default;${l.done ? "opacity:.55" : ""}"><span class="av">${initials(l.name)}</span><span class="grow"><span class="t">${esc(l.name)}</span><br><span class="small muted">${fmtDay(l.at.slice(0, 10))}${l.msg ? " · " + esc(l.msg) : ""}</span><br>
-          <a class="small" href="tel:${esc(l.phone)}">📞 ${esc(l.phone)}</a> · <a class="small" target="_blank" rel="noopener" href="https://wa.me/34${esc(String(l.phone).replace(/\D/g, "").replace(/^34/, ""))}?text=${encodeURIComponent(`¡Hola ${firstName(l.name)}! Somos CrossFit Iruña. ¿Qué día te viene bien para tu clase de prueba?`)}">WhatsApp</a></span>
+          ${l.email ? `<span class="small sel">${esc(l.email)}</span><br><a class="btn sm" style="margin-top:6px" href="mailto:${esc(l.email)}?subject=${encodeURIComponent("Tu clase de prueba en CrossFit Iruña")}&body=${encodeURIComponent(`¡Hola ${firstName(l.name)}!\n\nGracias por querer probar CrossFit Iruña. ¿Qué día y hora te vienen bien para tu clase de prueba gratis?\n\nEstamos en el Polígono Ipertegui II, 64, Orkoien. Trae ropa cómoda, agua y ganas.\n\n¡Nos vemos en el box!`)}">✉️ Responder por correo</a>` : esc(l.phone || "")}</span>
           <button class="btn sm ${l.done ? "" : "primary"}" data-dn="${id}">${l.done ? "Deshacer" : "✓ Hecho"}</button></div>`).join("")}</div>` : '<p class="empty">Nadie ha pedido clase de prueba todavía.</p>'}</div>`;
       sec.querySelectorAll("[data-dn]").forEach(b => b.onclick = () => safe(() => be.merge("leads/" + b.dataset.dn, { done: !leads[b.dataset.dn].done })));
     }

@@ -211,3 +211,23 @@ details.more[open]>summary::after{content:"–"}
 details.more[open]{padding-bottom:8px}
 details.more .plan{box-shadow:none}
 @media (max-width:480px){ .logo{height:34px} .toprow{min-height:56px} }
+/* Athlete panel */
+.me-card{background:linear-gradient(135deg,var(--brand),var(--brand-2));color:#fff}
+.me-card .muted{color:#EBC9CF}
+.av.big{width:52px;height:52px;border-radius:50%;background:rgba(255,255,255,.16);color:#fff;display:grid;place-items:center;font-weight:700;font-size:18px;flex:0 0 auto}
+.mstats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:14px}
+.mstats div{background:rgba(255,255,255,.1);border-radius:12px;padding:10px 8px;text-align:center}
+.mstats b{display:block;font-family:Oswald,Inter,sans-serif;font-size:26px;line-height:1.05}
+.mstats span{font-size:11.5px;color:#F1D6DB;line-height:1.2;display:block;margin-top:2px}
+.rank li.mine{background:var(--brand-soft);margin:0 -10px;padding-left:10px;padding-right:10px;border-radius:10px}
+.post .av{width:38px;height:38px;border-radius:50%;background:var(--brand-soft);color:var(--brand);display:grid;place-items:center;font-weight:700;font-size:13px;flex:0 0 auto}
+.postbody{margin-top:10px;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.postbody .kg{font-family:Oswald,Inter,sans-serif;font-size:30px;font-weight:600;color:var(--brand)}
+.postbody span:last-child{font-weight:600}
+.vid{display:block;margin-top:10px;border-radius:12px;overflow:hidden;background:var(--ink);color:#fff;text-decoration:none;position:relative}
+.vid img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;opacity:.85}
+.vid span{display:block;padding:10px 12px;font-weight:600}
+.vid img+span{position:absolute;left:10px;bottom:10px;background:rgba(0,0,0,.65);border-radius:8px;padding:6px 10px}
+a.bump{text-decoration:none;color:var(--ink)}
+.bump:disabled{opacity:.6;cursor:default}
+.sel{user-select:all}
