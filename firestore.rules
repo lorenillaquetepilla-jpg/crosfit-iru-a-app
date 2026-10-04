@@ -1,0 +1,102 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() { return request.auth != null; }
+    function me() { return get(/databases/$(database)/documents/members/$(request.auth.uid)).data; }
+    function isMember() { return signedIn() && exists(/databases/$(database)/documents/members/$(request.auth.uid)); }
+    function isStaff() { return isMember() && me().role in ['admin', 'coach']; }
+    function isAdmin() { return isMember() && me().role == 'admin'; }
+    function isActive() { return isMember() && me().status == 'active'; }
+    function onlyChanges(keys) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys); }
+
+    // First account becomes the owner; after that config/setup exists and nobody can do it again.
+    match /config/setup {
+      allow read: if signedIn();
+      allow create: if signedIn() && !exists(/databases/$(database)/documents/config/setup)
+        && getAfter(/databases/$(database)/documents/members/$(request.auth.uid)).data.role == 'admin';
+    }
+    match /config/box {
+      allow read: if signedIn();
+      allow create: if signedIn() && !exists(/databases/$(database)/documents/config/setup);
+      allow update: if isAdmin();
+    }
+    match /config/schedule {
+      allow read: if signedIn();
+      allow create: if signedIn() && !exists(/databases/$(database)/documents/config/setup);
+      allow update: if isAdmin() || (isStaff() && onlyChanges(['off']));
+    }
+
+    match /members/{uid} {
+      allow read: if (signedIn() && request.auth.uid == uid) || isStaff();
+      // A new athlete signs up as pending, with no plan, credits or payments.
+      allow create: if signedIn() && request.auth.uid == uid && (
+        (request.resource.data.role == 'athlete' && request.resource.data.status == 'pending'
+          && request.resource.data.planId == null && request.resource.data.paidUntil == null && request.resource.data.extra == 0
+          && !('stripeCustomer' in request.resource.data))
+        || (request.resource.data.role == 'admin' && !exists(/databases/$(database)/documents/config/setup)));
+      allow update: if isAdmin()
+        || (isStaff() && onlyChanges(['status']) && resource.data.role == 'athlete')
+        || (signedIn() && request.auth.uid == uid && onlyChanges(['name', 'phone']));
+      allow delete: if isAdmin();
+    }
+
+    // bookings/{date}__{slotId}__{uid}
+    match /bookings/{id} {
+      allow read: if isMember();
+      allow create: if (isActive() && request.resource.data.uid == request.auth.uid && id.matches('.*__' + request.auth.uid)
+          && request.resource.data.attended != true)
+        || isStaff();
+      allow delete: if (signedIn() && resource.data.uid == request.auth.uid) || isStaff();
+      // Anyone cancelling can move the first person on the waiting list into the class.
+      allow update: if isStaff() || (isActive() && onlyChanges(['wait']) && request.resource.data.wait == false);
+    }
+
+    match /wods/{date} {
+      allow read: if isMember();
+      allow write: if isStaff();
+    }
+
+    // results/{date}__{uid}; others may only give a "fist bump" (likes).
+    match /results/{id} {
+      allow read: if isMember();
+      allow create, delete: if (isActive() && id.matches('.*__' + request.auth.uid)
+          && (request.method == 'delete' || request.resource.data.uid == request.auth.uid)) || isStaff();
+      allow update: if (isActive() && resource.data.uid == request.auth.uid && request.resource.data.uid == request.auth.uid)
+        || (isActive() && onlyChanges(['likes'])
+            && request.resource.data.likes.diff(resource.data.likes).affectedKeys().hasOnly([request.auth.uid]))
+        || isStaff();
+    }
+
+    match /prs/{uid} {
+      allow read: if (signedIn() && request.auth.uid == uid) || isStaff();
+      allow write: if signedIn() && request.auth.uid == uid;
+    }
+
+    // Payments are written by the owner (cash, Bizum…) or by the Stripe function (admin SDK, skips these rules).
+    match /payments/{id} {
+      allow read: if isAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
+      allow write: if isAdmin();
+    }
+
+    match /notices/{id} {
+      allow read: if isMember();
+      allow write: if isStaff();
+    }
+
+    match /products/{id} {
+      allow read: if isMember();
+      allow write: if isAdmin();
+    }
+
+    // Free trial requests come from the sign-in screen, before having an account.
+    match /leads/{id} {
+      allow create: if request.resource.data.keys().hasOnly(['name', 'phone', 'email', 'msg', 'at', 'done'])
+        && request.resource.data.name is string && request.resource.data.name.size() > 0 && request.resource.data.name.size() <= 80
+        && request.resource.data.phone is string && request.resource.data.phone.size() <= 20
+        && request.resource.data.email is string && request.resource.data.email.size() <= 120
+        && request.resource.data.msg is string && request.resource.data.msg.size() <= 500
+        && request.resource.data.done == false;
+      allow read, update, delete: if isAdmin();
+    }
+  }
+}
