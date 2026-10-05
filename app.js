@@ -25,7 +25,7 @@ const fmtShort = s => `${parse(s).getDate()} ${MONTHS[parse(s).getMonth()].slice
 const money = n => (Math.round(n*100)/100).toLocaleString("es-ES", {minimumFractionDigits: n % 1 ? 2 : 0, maximumFractionDigits: 2}) + " €";
 const initials = n => String(n || "?").split(/\s+/).filter(Boolean).slice(0,2).map(w => w[0].toUpperCase()).join("");
 const typeOf = id => CLASS_TYPES.find(t => t.id === id) || CLASS_TYPES[0];
-const isOpenType = id => id === "open";
+const isOpenType = id => id === "open" || id === "outdoor";
 const startsAt = (date, s) => { const d = parse(date); const [h,m] = s.split(":").map(Number); d.setHours(h, m, 0, 0); return d; };
 const firstName = n => String(n || "").split(" ")[0];
 let toastT;
@@ -1158,6 +1158,7 @@ VIEWS.cuota = root => {
 
 /* ---------- view: SOCIOS (staff) ---------- */
 let sociosFilter = "todos", sociosQ = "";
+let schedDay = (new Date().getDay() + 6) % 7;
 VIEWS.socios = root => {
   let members = {}, recent = {}, monthPays = {};
   const since = addDays(today(), -45);
@@ -1269,24 +1270,61 @@ VIEWS.box = root => {
     },
     horario(sec) {
       const slots = S.sched.slots.slice();
-      sec.innerHTML = `<div class="card"><p class="small muted" style="margin-top:0">Este es el horario de todas las semanas. Para cancelar una clase un día concreto, hazlo desde la pestaña Clases.</p>
-        ${DAYS_L.map((dn, d) => `<div class="sched-day"><h4>${dn}</h4>${slots.filter(s => s.d === d).sort((a, b) => a.s.localeCompare(b.s)).map(s => `<button class="li" data-e="${s.id}"><span class="av" style="background:${typeOf(s.type).c};color:#fff">${s.s.slice(0, 2)}</span><span class="grow"><span class="t">${s.s}–${s.e} · ${esc(typeOf(s.type).name)}</span><br><span class="small muted">${s.cap} plazas</span></span>›</button>`).join("") || '<p class="small muted">Sin clases</p>'}
-          <button class="btn sm ghost" data-add="${d}">+ Añadir clase el ${dn.toLowerCase()}</button></div>`).join("")}</div>`;
-      const edit = (s, isNew) => openDlg(`<h3>${isNew ? "Nueva clase" : "Editar clase"}</h3><form id="sf">
-        <label>Día<select id="sD">${DAYS_L.map((n, i) => `<option value="${i}" ${s.d === i ? "selected" : ""}>${n}</option>`).join("")}</select></label>
+      const save = (list, msg) => safe(async () => { await be.merge("config/schedule", { slots: list }); if (msg) toast(msg); });
+      const day = slots.filter(s => s.d === schedDay).sort((a, b) => a.s.localeCompare(b.s) || a.type.localeCompare(b.type));
+      const byTime = {};
+      day.forEach(s => (byTime[s.s + "–" + s.e] ||= []).push(s));
+      sec.innerHTML = `<div class="card"><p class="small muted" style="margin-top:0">Este es el horario de todas las semanas. Toca un día, quita clases con la ✕ o añade nuevas. Para cancelar una clase solo un día concreto, hazlo desde la pestaña Clases.</p>
+        <div class="seg" role="group" aria-label="Día" style="margin-bottom:6px">${DAYS.map((dn, d) => `<button data-sd="${d}" aria-pressed="${d === schedDay}"><b>${dn}</b><span>${slots.filter(s => s.d === d).length} clases</span></button>`).join("")}</div>
+        <button class="btn primary block" id="sAdd" style="margin:8px 0 4px">+ Añadir clase</button>
+        <div class="sched-day"><h4>${DAYS_L[schedDay]}</h4>${Object.keys(byTime).length ? Object.entries(byTime).map(([h, list]) => `<div class="sh"><div class="sh-t">${h}</div>${list.map(s => `<div class="sh-c"><button class="sh-e" data-e="${s.id}"><i style="background:${typeOf(s.type).c}"></i><span class="grow"><b>${esc(typeOf(s.type).name)}</b> <span class="small muted">· ${s.cap} plazas</span></span></button><button class="sh-x" data-rm="${s.id}" aria-label="Quitar ${esc(typeOf(s.type).name)} de las ${s.s}">✕</button></div>`).join("")}</div>`).join("") : '<p class="small muted">Este día no hay clases.</p>'}</div>
+        ${day.length ? `<button class="btn sm ghost" id="sCopy" style="margin-top:12px">Copiar el ${DAYS_L[schedDay].toLowerCase()} a otros días</button>` : ""}</div>`;
+      const dayChecks = (sel, id) => `<div class="daychk" id="${id}">${DAYS.map((n, i) => `<label><input type="checkbox" value="${i}" ${sel.includes(i) ? "checked" : ""}><span>${n}</span></label>`).join("")}</div>
+        <div class="row" style="gap:6px;margin-top:6px"><button type="button" class="btn sm ghost" data-pick="0,1,2,3,4">Lunes a viernes</button><button type="button" class="btn sm ghost" data-pick="5,6">Fin de semana</button><button type="button" class="btn sm ghost" data-pick="">Ninguno</button></div>`;
+      const bindChecks = id => $("#dlgBody").querySelectorAll("[data-pick]").forEach(b => b.onclick = () => { const v = b.dataset.pick ? b.dataset.pick.split(",").map(Number) : []; $("#" + id).querySelectorAll("input").forEach(i => i.checked = v.includes(Number(i.value))); });
+      const picked = id => [...$("#" + id).querySelectorAll("input:checked")].map(i => Number(i.value));
+      const newId = i => "s" + Date.now().toString(36) + (i || "") + Math.random().toString(36).slice(2, 5);
+      const edit = (s, isNew) => openDlg(`<h3>${isNew ? "Añadir clase" : "Editar clase"}</h3><form id="sf">
+        ${isNew ? `<label>¿Qué días?</label>${dayChecks([s.d], "sDays")}` : `<label>Día<select id="sD">${DAYS_L.map((n, i) => `<option value="${i}" ${s.d === i ? "selected" : ""}>${n}</option>`).join("")}</select></label>`}
         <div class="grid2"><label>Empieza<input id="sS" type="time" step="300" required value="${s.s}"></label><label>Termina<input id="sE" type="time" step="300" required value="${s.e}"></label></div>
         <div class="grid2"><label>Tipo<select id="sT">${CLASS_TYPES.map(t => `<option value="${t.id}" ${s.type === t.id ? "selected" : ""}>${t.name}</option>`).join("")}</select></label><label>Plazas<input id="sC" type="number" min="1" max="99" required value="${s.cap}"></label></div>
         <div class="err" id="sErr"></div>
-        <div class="dlgbtns">${!isNew ? '<button type="button" class="btn danger" id="sDel">Borrar</button>' : ""}<button type="button" class="btn" id="sX">Cancelar</button><button class="btn primary">Guardar</button></div></form>`, () => {
+        <div class="dlgbtns">${!isNew ? '<button type="button" class="btn danger" id="sDel">Quitar</button>' : ""}<button type="button" class="btn" id="sX">Cancelar</button><button class="btn primary">Guardar</button></div></form>`, () => {
         $("#sX").onclick = closeDlg;
-        $("#sDel")?.addEventListener("click", async () => { await safe(() => be.merge("config/schedule", { slots: S.sched.slots.filter(x => x.id !== s.id) })); closeDlg(); });
+        if (isNew) bindChecks("sDays");
+        $("#sDel")?.addEventListener("click", async () => { closeDlg(); await save(S.sched.slots.filter(x => x.id !== s.id), "Clase quitada."); });
         $("#sf").onsubmit = async e => { e.preventDefault();
-          const n = { id: s.id, d: Number($("#sD").value), s: $("#sS").value, e: $("#sE").value, type: $("#sT").value, cap: Number($("#sC").value) };
-          if (n.e <= n.s) { $("#sErr").textContent = "La hora de fin tiene que ser después de la de inicio."; return; }
-          await safe(() => be.merge("config/schedule", { slots: isNew ? [...S.sched.slots, n] : S.sched.slots.map(x => x.id === s.id ? n : x) })); closeDlg(); toast("Horario guardado."); };
+          const base = { s: $("#sS").value, e: $("#sE").value, type: $("#sT").value, cap: Number($("#sC").value) };
+          if (base.e <= base.s) { $("#sErr").textContent = "La hora de fin tiene que ser después de la de inicio."; return; }
+          if (isNew) {
+            const ds = picked("sDays");
+            if (!ds.length) { $("#sErr").textContent = "Marca al menos un día."; return; }
+            closeDlg();
+            await save([...S.sched.slots, ...ds.map((d, i) => ({ id: newId(i), d, ...base }))], ds.length > 1 ? `Clase añadida en ${ds.length} días.` : "Clase añadida.");
+          } else { closeDlg(); await save(S.sched.slots.map(x => x.id === s.id ? { id: s.id, d: Number($("#sD").value), ...base } : x), "Horario guardado."); }
+        };
       });
+      sec.querySelectorAll("[data-sd]").forEach(b => b.onclick = () => { schedDay = Number(b.dataset.sd); SECS.horario(sec); });
       sec.querySelectorAll("[data-e]").forEach(b => b.onclick = () => edit(slots.find(s => s.id === b.dataset.e), false));
-      sec.querySelectorAll("[data-add]").forEach(b => b.onclick = () => edit({ id: "s" + Date.now().toString(36), d: Number(b.dataset.add), s: "19:00", e: "20:00", type: "crossfit", cap: 14 }, true));
+      sec.querySelectorAll("[data-rm]").forEach(b => b.onclick = async () => {
+        const s = slots.find(x => x.id === b.dataset.rm);
+        if (!await confirmDlg("Quitar clase", `¿Quitamos ${typeOf(s.type).name} de ${s.s} a ${s.e} de todos los ${DAYS_L[s.d].toLowerCase()}?`, "Quitar")) return;
+        await save(S.sched.slots.filter(x => x.id !== s.id), "Clase quitada.");
+      });
+      $("#sAdd").onclick = () => edit({ d: schedDay, s: "19:00", e: "20:00", type: "crossfit", cap: 16 }, true);
+      $("#sCopy")?.addEventListener("click", () => openDlg(`<h3>Copiar el ${DAYS_L[schedDay].toLowerCase()}</h3><p class="small muted">Los días que marques tendrán exactamente las mismas clases que el ${DAYS_L[schedDay].toLowerCase()} (se cambian las que tuvieran).</p>
+        ${dayChecks([], "cDays")}<div class="err" id="cErr"></div><div class="dlgbtns"><button type="button" class="btn" id="cX">Cancelar</button><button type="button" class="btn primary" id="cOk">Copiar</button></div>`, () => {
+        $("#dlgBody").querySelector(`#cDays input[value="${schedDay}"]`).closest("label").style.display = "none";
+        bindChecks("cDays");
+        $("#cX").onclick = closeDlg;
+        $("#cOk").onclick = async () => {
+          const ds = picked("cDays").filter(d => d !== schedDay);
+          if (!ds.length) { $("#cErr").textContent = "Marca al menos un día."; return; }
+          const src = S.sched.slots.filter(x => x.d === schedDay);
+          const list = [...S.sched.slots.filter(x => !ds.includes(x.d)), ...ds.flatMap(d => src.map((x, i) => ({ ...x, id: newId(d * 100 + i), d })))];
+          closeDlg(); await save(list, `Copiado a ${ds.length} ${ds.length > 1 ? "días" : "día"}.`);
+        };
+      }));
     },
     tarifas(sec) {
       const box = S.box;

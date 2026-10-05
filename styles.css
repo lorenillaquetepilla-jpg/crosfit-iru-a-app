@@ -261,3 +261,18 @@ table.lb tr.mine td{background:var(--brand-soft)}
 @keyframes pWig{25%{transform:rotate(-12deg)}75%{transform:rotate(12deg)}}
 @keyframes pShine{to{background-position:300% 0}}
 @media (prefers-reduced-motion:reduce){.party,.party-card,.party-cara,.party-v{animation:none}}
+/* Horario (Box) */
+.sh{display:flex;flex-direction:column;gap:6px;padding:10px 0;border-top:1px solid var(--line)}
+.sh:first-of-type{border-top:0}
+.sh-t{font-family:Oswald;font-weight:600;font-size:16px;color:var(--brand)}
+.sh-c{display:flex;align-items:center;gap:6px}
+.sh-e{flex:1;display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--line);border-radius:10px;padding:9px 10px;text-align:left;cursor:pointer;font:inherit;color:var(--ink)}
+.sh-e i{width:10px;height:10px;border-radius:50%;flex:0 0 auto}
+.sh-x{width:40px;height:40px;border-radius:10px;border:1px solid var(--line);background:#fff;color:var(--bad);font-size:16px;cursor:pointer;flex:0 0 auto}
+.sh-x:hover{background:var(--bad-soft)}
+.daychk{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.daychk label{margin:0}
+.daychk input{position:absolute;opacity:0;width:1px;height:1px}
+.daychk span{display:inline-block;min-width:44px;text-align:center;padding:9px 6px;border:1px solid var(--line);border-radius:10px;background:#fff;font-weight:600;cursor:pointer}
+.daychk input:checked + span{background:var(--brand);color:#fff;border-color:var(--brand)}
+.daychk input:focus-visible + span{outline:2px solid var(--brand-3)}
