@@ -7,6 +7,8 @@ service cloud.firestore {
     function isStaff() { return isMember() && me().role in ['admin', 'coach']; }
     function isAdmin() { return isMember() && me().role == 'admin'; }
     function isActive() { return isMember() && me().status == 'active'; }
+    function myEmail() { return request.auth.token.email.lower(); }
+    function myInvite() { return exists(/databases/$(database)/documents/invites/$(myEmail())) ? get(/databases/$(database)/documents/invites/$(myEmail())).data : null; }
     function onlyChanges(keys) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys); }
 
     // First account becomes the owner; after that config/setup exists and nobody can do it again.
@@ -33,7 +35,11 @@ service cloud.firestore {
         (request.resource.data.role == 'athlete' && request.resource.data.status == 'pending'
           && request.resource.data.planId == null && request.resource.data.paidUntil == null && request.resource.data.extra == 0
           && !('stripeCustomer' in request.resource.data))
-        || (request.resource.data.role == 'admin' && !exists(/databases/$(database)/documents/config/setup)));
+        || (request.resource.data.role == 'admin' && !exists(/databases/$(database)/documents/config/setup))
+        // A member imported from Aimharder enters straight away with the plan the box gave them.
+        || (request.resource.data.role == 'athlete' && request.resource.data.status == 'active' && myInvite() != null
+          && request.resource.data.planId == myInvite().planId && request.resource.data.paidUntil == null && request.resource.data.extra == 0
+          && !('stripeCustomer' in request.resource.data)));
       allow update: if isAdmin()
         || (isStaff() && onlyChanges(['status']) && resource.data.role == 'athlete')
         || (signedIn() && request.auth.uid == uid && onlyChanges(['name', 'phone', 'sex']));
@@ -95,6 +101,12 @@ service cloud.firestore {
         && id == request.resource.data.compId + '__' + request.auth.uid && request.resource.data.scores.size() == 0);
       allow update: if isStaff();
       allow delete: if isStaff() || (signedIn() && resource.data.uid == request.auth.uid);
+    }
+
+    // invites/{email}: members imported from Aimharder who haven't created their account yet.
+    match /invites/{email} {
+      allow get, delete: if signedIn() && request.auth.token.email != null && email == myEmail();
+      allow list, write: if isAdmin();
     }
 
     match /notices/{id} {

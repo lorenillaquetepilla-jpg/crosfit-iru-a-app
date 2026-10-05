@@ -211,6 +211,19 @@ async function renderJoin() {
       { box: DEFAULT_BOX, schedule: DEFAULT_SCHEDULE }));
     return;
   }
+  const inv = S.user.email ? await be.get("invites/" + S.user.email.toLowerCase()).catch(() => null) : null;
+  if (inv) {
+    const p = planOf(inv.planId) || (await be.get("config/box").catch(() => null))?.plans?.find(x => x.id === inv.planId);
+    m.innerHTML = `<div class="auth">${cara(`¡Aupa, ${esc(firstName(inv.name))}!`, `Ya eres del box${p ? ` con la tarifa <b>${esc(p.name)}</b>` : ""}. Revisa tus datos y entra.`)}
+      <div class="card"><form id="jf"><label>Nombre y apellidos<input id="jN" value="${esc(inv.name)}" required maxlength="80"></label>
+      <label>Teléfono<input id="jP" type="tel" maxlength="20" value="${esc(inv.phone || "")}"></label>
+      <button class="btn primary block" style="margin-top:12px">Entrar al box</button></form></div></div>`;
+    $("#jf").onsubmit = ev => { ev.preventDefault(); safe(async () => {
+      await be.set("members/" + S.user.uid, { role: "athlete", name: $("#jN").value.trim(), phone: $("#jP").value.trim(), email: S.user.email.toLowerCase(), sex: inv.sex || "", status: "active", planId: inv.planId || null, paidUntil: null, extra: 0, joined: today(), imported: true });
+      await be.del("invites/" + S.user.email.toLowerCase());
+    }); };
+    return;
+  }
   m.innerHTML = `<div class="auth">${cara("¡Bienvenido al box!", "Completa tus datos. El box revisará tu alta y te asignará tu tarifa.")}
     <div class="card"><form id="jf"><label>Nombre y apellidos<input id="jN" value="${esc(name)}" required maxlength="80"></label>
     <label>Teléfono<input id="jP" type="tel" maxlength="20"></label>
@@ -1157,10 +1170,94 @@ VIEWS.cuota = root => {
 };
 
 /* ---------- view: SOCIOS (staff) ---------- */
+/* ---------- import members from Aimharder (Excel / CSV / pasted) ---------- */
+const normTxt = s => String(s ?? "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9@.+ ]/g, " ").replace(/\s+/g, " ").trim();
+const IMPORT_COLS = {
+  name: ["nombre", "name", "nombre completo", "socio", "cliente", "usuario", "atleta"],
+  surname: ["apellidos", "apellido", "apellido 1", "primer apellido", "surname", "last name"],
+  surname2: ["apellido 2", "segundo apellido"],
+  email: ["email", "e mail", "correo", "correo electronico", "mail"],
+  phone: ["telefono", "movil", "phone", "tel", "telefono movil", "celular"],
+  plan: ["tarifa", "plan", "cuota", "suscripcion", "bono", "tarifa actual", "producto"],
+  sex: ["sexo", "genero", "gender"]
+};
+function rowsToPeople(rows) {
+  rows = rows.filter(r => r.some(c => String(c ?? "").trim()));
+  if (!rows.length) return [];
+  let hi = rows.findIndex(r => r.some(c => IMPORT_COLS.email.includes(normTxt(c))));
+  const col = {};
+  if (hi >= 0) rows[hi].forEach((c, i) => { const n = normTxt(c); for (const [k, ws] of Object.entries(IMPORT_COLS)) if (col[k] == null && (ws.includes(n) || (k !== "surname2" && ws.some(w => w.length > 4 && n.startsWith(w))))) { col[k] = i; break; } });
+  else { // sin cabecera: buscamos la columna de correos y suponemos que la primera es el nombre
+    hi = -1; const r0 = rows[0]; col.email = r0.findIndex(c => /@/.test(c)); col.name = col.email === 0 ? 1 : 0; col.phone = r0.findIndex(c => /^\+?[\d\s]{9,15}$/.test(String(c).trim()));
+  }
+  const get = (r, k) => col[k] != null && col[k] >= 0 ? String(r[col[k]] ?? "").trim() : "";
+  return rows.slice(hi + 1).map(r => {
+    const name = [get(r, "name"), get(r, "surname"), get(r, "surname2")].filter(Boolean).join(" ").replace(/\s+/g, " ");
+    const sx = normTxt(get(r, "sex"));
+    return { name, email: get(r, "email").toLowerCase(), phone: get(r, "phone"), planTxt: get(r, "plan"), sex: /^(m|f|mujer|hombre|chica|chico|femenino|masculino|h)/.test(sx) ? (/^(f|mujer|chica|femenino)/.test(sx) ? "f" : "m") : "" };
+  }).filter(p => p.name || p.email);
+}
+function matchPlan(txt) {
+  const n = normTxt(txt); if (!n) return null;
+  const ps = plans().map(p => ({ p, k: normTxt(p.name) }));
+  return (ps.find(x => x.k === n) || ps.find(x => n.includes(x.k) || x.k.includes(n))
+    || ps.find(x => { const d = n.match(/\d+/)?.[0]; return d && x.k.match(/\d+/)?.[0] === d && x.k.split(" ")[0] === n.split(" ")[0]; }))?.p.id || null;
+}
+const parseTsv = txt => { const sep = txt.includes("\t") ? "\t" : txt.split("\n")[0].includes(";") ? ";" : ",";
+  return txt.split(/\r?\n/).map(l => l.split(sep).map(c => c.replace(/^"|"$/g, "").trim())); };
+async function readSheet(file) {
+  if (/\.(csv|txt|tsv)$/i.test(file.name)) return parseTsv(await file.text());
+  const XLSX = await import("./vendor/xlsx.mjs");
+  const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+  return XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: false, defval: "" });
+}
+function importDlg(members, invites) {
+  const emails = new Set(Object.values(members).map(m => (m.email || "").toLowerCase()));
+  openDlg(`<h3>Importar socios</h3>
+    <p class="small muted" style="margin-top:0">Saca la lista de socios de Aimharder en Excel y súbela aquí. Necesitamos al menos el <b>nombre</b> y el <b>correo</b>; si trae teléfono y tarifa, también los cogemos.</p>
+    <label class="btn primary block" style="text-align:center;cursor:pointer">📄 Elegir archivo Excel o CSV<input type="file" id="iF" accept=".xlsx,.xls,.csv,.txt" hidden></label>
+    <details class="more" style="margin-top:10px"><summary>O pega la lista aquí</summary><p class="small muted">Copia las columnas desde Excel (con la fila de títulos) y pégalas.</p><textarea id="iT" style="min-height:110px" placeholder="Nombre&#9;Email&#9;Teléfono&#9;Tarifa"></textarea><button type="button" class="btn sm" id="iTb" style="margin-top:6px">Leer lista</button></details>
+    <div class="err" id="iErr"></div><div id="iPrev"></div>
+    <div class="dlgbtns"><button type="button" class="btn" id="iX">Cancelar</button><button type="button" class="btn primary" id="iOk" hidden>Importar</button></div>`, () => {
+    let people = [];
+    $("#iX").onclick = closeDlg;
+    const show = rows => {
+      people = rowsToPeople(rows).map(p => ({ ...p, planId: matchPlan(p.planTxt),
+        st: emails.has(p.email) ? "dup" : !p.email ? "none" : !/^[^@\s/]+@[^@\s/]+\.[^@\s/]+$/.test(p.email) ? "bad" : invites[p.email] ? "upd" : "new" }));
+      const ok = people.filter(p => p.st === "new" || p.st === "upd");
+      $("#iErr").textContent = people.length ? "" : "No hemos encontrado socios. Comprueba que el archivo tiene una columna de correo.";
+      const lbl = { new: "", upd: '<span class="chip grey">Ya importado</span>', dup: '<span class="chip ok">Ya está en la app</span>', none: '<span class="chip bad">Falta el correo</span>', bad: '<span class="chip bad">Correo raro</span>' };
+      $("#iPrev").innerHTML = people.length ? `<p class="small" style="margin:12px 0 4px"><b>${ok.length}</b> ${ok.length === 1 ? "socio" : "socios"} para importar${people.length - ok.length ? ` · ${people.length - ok.length} se saltan` : ""}. Revisa la tarifa de cada uno:</p>
+        <div class="list imp">${people.map((p, i) => `<div class="li" style="cursor:default;${p.st === "new" || p.st === "upd" ? "" : "opacity:.55"}"><span class="grow"><span class="t">${esc(p.name || "(sin nombre)")}</span> ${lbl[p.st]}<br><span class="small muted">${esc(p.email || "")}${p.phone ? " · " + esc(p.phone) : ""}</span>
+          ${p.st === "new" || p.st === "upd" ? `<select data-ip="${i}" style="margin-top:4px">${`<option value="">Sin tarifa${p.planTxt ? ` (ponía "${esc(p.planTxt)}")` : ""}</option>` + plans().map(x => `<option value="${x.id}" ${p.planId === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select>` : ""}</span></div>`).join("")}</div>` : "";
+      $("#iPrev").querySelectorAll("[data-ip]").forEach(s => s.onchange = () => people[Number(s.dataset.ip)].planId = s.value || null);
+      $("#iOk").hidden = !ok.length; $("#iOk").textContent = `Importar ${ok.length} ${ok.length === 1 ? "socio" : "socios"}`;
+    };
+    $("#iF").onchange = async e => { const f = e.target.files[0]; if (!f) return; $("#iErr").textContent = "Leyendo…";
+      try { show(await readSheet(f)); } catch (x) { console.error(x); $("#iErr").textContent = "No hemos podido leer el archivo. Prueba a guardarlo como CSV o a pegar la lista."; } };
+    $("#iTb").onclick = () => show(parseTsv($("#iT").value));
+    $("#iOk").onclick = async () => {
+      const ok = people.filter(p => p.st === "new" || p.st === "upd");
+      $("#iOk").disabled = true; $("#iOk").textContent = "Importando…";
+      await safe(async () => { for (const p of ok) await be.set("invites/" + p.email, { name: p.name || p.email.split("@")[0], email: p.email, phone: p.phone, sex: p.sex, planId: p.planId, at: new Date().toISOString() }); });
+      closeDlg(); sociosFilter = "invitados"; toast(`${ok.length} ${ok.length === 1 ? "socio importado" : "socios importados"}. Diles que creen su cuenta con su correo.`); refresh();
+    };
+  });
+}
+function inviteDlg(id, m) {
+  openDlg(`<h3>${esc(m.name)}</h3><p class="small muted" style="margin-top:0">${esc(m.email)}${m.phone ? " · " + esc(m.phone) : ""}<br>Aún no ha entrado en la app. Cuando cree su cuenta con este correo, entrará directo con esta tarifa.</p>
+    <label>Tarifa<select id="ivP"><option value="">Sin tarifa</option>${plans().map(x => `<option value="${x.id}" ${m.planId === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></label>
+    <div class="dlgbtns"><button type="button" class="btn danger" id="ivD">Quitar</button><button type="button" class="btn" id="ivX">Cerrar</button><button type="button" class="btn primary" id="ivS">Guardar</button></div>`, () => {
+    $("#ivX").onclick = closeDlg;
+    $("#ivS").onclick = async () => { await safe(() => be.merge("invites/" + id, { planId: $("#ivP").value || null })); closeDlg(); toast("Guardado."); };
+    $("#ivD").onclick = async () => { await safe(() => be.del("invites/" + id)); closeDlg(); toast("Quitado de la lista."); };
+  });
+}
+
 let sociosFilter = "todos", sociosQ = "";
 let schedDay = (new Date().getDay() + 6) % 7;
 VIEWS.socios = root => {
-  let members = {}, recent = {}, monthPays = {};
+  let members = {}, recent = {}, monthPays = {}, invites = {};
   const since = addDays(today(), -45);
   const lastSeen = () => { const o = {}; for (const b of Object.values(recent)) if (b.date <= today() && !b.wait && (!o[b.uid] || b.date > o[b.uid])) o[b.uid] = b.date; return o; };
   const draw = () => {
@@ -1171,19 +1268,26 @@ VIEWS.socios = root => {
       nuevos: ([, m]) => m.status === "pending",
       impago: ([, m]) => m.status === "active" && m.role === "athlete" && m.planId && !paidFor(m),
       ausentes: ([id, m]) => m.status === "active" && m.role === "athlete" && (!seen[id] || seen[id] < lim),
-      baja: ([, m]) => m.status === "baja"
+      baja: ([, m]) => m.status === "baja",
+      invitados: () => false
     };
-    const count = k => ath.filter(F[k]).length;
+    const count = k => k === "invitados" ? Object.keys(invites).length : ath.filter(F[k]).length;
     const q = sociosQ.trim().toLowerCase();
     const list = ath.filter(F[sociosFilter]).filter(([, m]) => !q || m.name.toLowerCase().includes(q) || (m.email || "").includes(q)).sort((a, b) => a[1].name.localeCompare(b[1].name));
-    const L = { todos: "Todos", nuevos: "Nuevos", impago: "Sin pagar", ausentes: "+10 días sin venir", baja: "Bajas" };
+    const L = { todos: "Todos", nuevos: "Nuevos", impago: "Sin pagar", ausentes: "+10 días sin venir", baja: "Bajas", invitados: "Sin registrar" };
+    const inv = Object.entries(invites).filter(([, m]) => !q || m.name.toLowerCase().includes(q) || m.email.includes(q)).sort((a, b) => a[1].name.localeCompare(b[1].name));
     root.innerHTML = `<div class="h"><h2>Socios</h2><span class="sub">${count("todos")} en el box</span></div>
-      <div class="seg" style="margin-bottom:10px">${Object.keys(L).filter(k => isAdmin() || k !== "impago").map(k => `<button data-f="${k}" aria-pressed="${sociosFilter === k}">${L[k]} <span>${count(k)}</span></button>`).join("")}</div>
+      <div class="seg" style="margin-bottom:10px">${Object.keys(L).filter(k => isAdmin() || (k !== "impago" && k !== "invitados")).filter(k => k !== "invitados" || count(k)).map(k => `<button data-f="${k}" aria-pressed="${sociosFilter === k}">${L[k]} <span>${count(k)}</span></button>`).join("")}</div>
       <input class="search" id="sq" type="search" placeholder="Buscar por nombre…" value="${esc(sociosQ)}">
+      ${sociosFilter === "invitados" ? `<div class="card"><p class="small muted" style="margin-top:0">Socios importados que aún no han entrado en la app. Cuando creen su cuenta con este correo, entrarán directos con su tarifa.</p>
+        ${inv.length ? `<div class="list">${inv.map(([id, m]) => `<button class="li" data-inv="${esc(id)}"><span class="av">${initials(m.name)}</span><span class="grow"><span class="t">${esc(m.name)}</span><br><span class="small muted">${esc(m.email)} · ${planOf(m.planId) ? esc(planOf(m.planId).name) : "Sin tarifa"}</span></span><span class="chip grey">Sin registrar</span></button>`).join("")}</div>` : '<p class="empty">No hay nadie en esta lista.</p>'}</div>` : `
       <div class="card">${list.length ? `<div class="list">${list.map(([id, m]) => { const p = planOf(m.planId);
         return `<button class="li" data-m="${id}"><span class="av">${initials(m.name)}</span><span class="grow"><span class="t">${esc(m.name)}</span>${m.role !== "athlete" ? ` <span class="chip">${m.role === "admin" ? "Dueño" : "Coach"}</span>` : ""}<br>
           <span class="small muted">${p ? esc(p.name) : m.role === "athlete" ? "Sin tarifa" : ""}${m.role === "athlete" && m.status === "active" ? ` · ${seen[id] ? `vino el ${fmtShort(seen[id])}` : "sin venir"}` : ""}</span></span>
-          ${m.status === "pending" ? '<span class="chip warn">Nuevo</span>' : m.status === "baja" ? '<span class="chip grey">Baja</span>' : m.role === "athlete" && m.planId && isAdmin() ? (paidFor(m) ? '<span class="chip ok">Pagado</span>' : '<span class="chip bad">Pendiente</span>') : ""}</button>`; }).join("")}</div>` : '<p class="empty">No hay nadie en esta lista.</p>'}</div>`;
+          ${m.status === "pending" ? '<span class="chip warn">Nuevo</span>' : m.status === "baja" ? '<span class="chip grey">Baja</span>' : m.role === "athlete" && m.planId && isAdmin() ? (paidFor(m) ? '<span class="chip ok">Pagado</span>' : '<span class="chip bad">Pendiente</span>') : ""}</button>`; }).join("")}</div>` : '<p class="empty">No hay nadie en esta lista.</p>'}</div>`}
+      ${isAdmin() ? `<button class="btn block" id="imp">📥 Importar socios desde Excel</button>` : ""}`;
+    $("#imp")?.addEventListener("click", () => importDlg(members, invites));
+    root.querySelectorAll("[data-inv]").forEach(b => b.onclick = () => inviteDlg(b.dataset.inv, invites[b.dataset.inv]));
     root.querySelectorAll("[data-f]").forEach(b => b.onclick = () => { sociosFilter = b.dataset.f; draw(); });
     const sq = $("#sq"); sq.oninput = () => { sociosQ = sq.value; const pos = sq.selectionStart; draw(); const n = $("#sq"); n.focus(); n.setSelectionRange(pos, pos); };
     root.querySelectorAll("[data-m]").forEach(b => b.onclick = () => memberDlg(b.dataset.m, members[b.dataset.m], seen[b.dataset.m]));
@@ -1225,6 +1329,7 @@ VIEWS.socios = root => {
   };
   queryV("members", [], o => { members = o; membersCache = o; draw(); });
   queryV("bookings", [["date", ">=", since]], o => { recent = o; draw(); });
+  if (isAdmin()) queryV("invites", [], o => { invites = o; draw(); });
   return { draw };
 };
 
