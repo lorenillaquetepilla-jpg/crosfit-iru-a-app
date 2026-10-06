@@ -283,3 +283,19 @@ table.lb tr.mine td{background:var(--brand-soft)}
 .card.good{border-left:5px solid var(--ok);background:var(--ok-soft)}
 .card.review{border-left:5px solid #F5B400}
 .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+/* Semana completa en Clases */
+.weeknav{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.weeknav b{font-family:Oswald;font-size:17px;font-weight:600;color:var(--brand)}
+.weeknav .btn{min-width:44px;font-size:20px;padding:4px 10px}
+.weeknav .btn:disabled{opacity:.3}
+.seg.week{overflow:visible}
+.seg.week button{flex:1 1 0;min-width:0;padding:8px 2px}
+.seg.week button[data-past]{opacity:.55}
+/* Mi cuerpo: gráfica de evolución */
+.bignum{font-family:Oswald;font-size:40px;font-weight:600;color:var(--brand);line-height:1.05}
+.bignum small{font-size:18px;color:var(--muted)}
+.lchart{position:relative;margin-top:6px}
+.lchart svg{display:block;touch-action:pan-y}
+.lchart .tip{position:absolute;background:var(--ink);color:#fff;font-size:12.5px;line-height:1.3;padding:6px 9px;border-radius:8px;pointer-events:none;white-space:nowrap;text-align:center;min-width:80px}
+.seg.rng button{min-width:0;padding:6px 10px;font-size:13px}
+.tabs2 button{padding:8px 4px;font-size:14px}

@@ -1,6 +1,6 @@
 // Modo demostración: mismos métodos que backend-firebase.js, con los datos guardados en este navegador.
 import { DEFAULT_BOX, DEFAULT_SCHEDULE } from "./defaults.js";
-const KEY = "cfi-demo-v8";
+const KEY = "cfi-demo-v9";
 
 const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const dayOff = n => { const d = new Date(); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() + n); return d; };
@@ -80,6 +80,12 @@ function seed() {
   mark("u-mikel", "Clean & jerk", 110, 18); mark("u-laura", "Clean & jerk", 65, 1, { note: "Con split jerk por primera vez" }); mark("u-irati", "Clean", 55, 4);
   mark("demo-ana", "Back squat", 60, 9, { sets: 3, reps: 5, pr: true }); mark("demo-ana", "Front squat", 50, 3, { sets: 5, reps: 3, pr: true, note: "Muy fácil, la próxima subo" });
   mark("u-irati", "Back squat", 55, 1, { sets: 3, reps: 8, note: "3×8 sin parar 🔥", likes: { "demo-ana": true } });
+  // Ana's body metrics, roughly weekly over the last six months
+  for (let w = 26, i = 0; w >= 0; w -= (w % 3 === 0 ? 2 : 1), i++) {
+    const k = 26 - w, noise = [0.3, -0.2, 0.1, 0.4, -0.3, 0, 0.2][i % 7];
+    db["metrics/b" + i] = { uid: "demo-ana", date: ymd(dayOff(-w * 7)), weight: Math.round((64.8 - k * 0.11 + noise) * 10) / 10,
+      fat: i % 3 === 0 ? Math.round((27.2 - k * 0.1) * 10) / 10 : null, waist: i % 4 === 0 ? Math.round(76 - k * 0.15) : null, note: "", at: dayOff(-w * 7).toISOString() };
+  }
   mark("u-javier", "Peso muerto", 190, 22); mark("u-mikel", "Peso muerto", 200, 35); mark("u-maite", "Peso muerto", 100, 7);
   const pay = (uid, amount, method, month, plan) => { db["payments/" + Math.random().toString(36).slice(2, 10)] = { uid, name: db["members/" + uid].name, amount, method, month, concept: plan, at: now, by: "demo-david" }; };
   pay("demo-ana", 82, "tarjeta", month, "Pack 3"); pay("u-mikel", 105, "tarjeta", month, "Ilimitada");

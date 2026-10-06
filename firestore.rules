@@ -114,6 +114,12 @@ service cloud.firestore {
       allow read, write: if isStaff();
     }
 
+    // Body metrics (weight, fat %, waist): private to each member.
+    match /metrics/{id} {
+      allow read, delete: if signedIn() && resource.data.uid == request.auth.uid;
+      allow create: if isMember() && request.resource.data.uid == request.auth.uid;
+    }
+
     match /notices/{id} {
       allow read: if isMember();
       allow write: if isStaff();

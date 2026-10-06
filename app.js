@@ -413,11 +413,11 @@ function manageSlot(date, slot, bookings) {
   draw();
 }
 
-function dayPicker(sel, from, n, onPick) {
-  let h = '<div class="seg" role="group" aria-label="Día">';
+function dayPicker(sel, from, n, onPick, cls = "") {
+  let h = `<div class="seg ${cls}" role="group" aria-label="Día">`;
   for (let i = 0; i < n; i++) {
     const d = addDays(from, i);
-    h += `<button data-day="${d}" aria-pressed="${d === sel}"><span>${i === 0 && from === today() ? "Hoy" : DAYS[wdOf(d)]}</span><b>${parse(d).getDate()}</b></button>`;
+    h += `<button data-day="${d}" aria-pressed="${d === sel}"><span>${d === today() ? "Hoy" : DAYS[wdOf(d)]}</span><b>${parse(d).getDate()}</b></button>`;
   }
   return h + "</div>";
 }
@@ -560,19 +560,24 @@ VIEWS.hoy = root => {
 let clasesDay = null;
 VIEWS.clases = root => {
   if (!clasesDay || clasesDay < today()) clasesDay = today();
+  if (!isStaff() && clasesDay > addDays(weekStart(1), 6)) clasesDay = today();
   let bookings = {}, unsub = null;
   const listen = () => { unsub?.(); unsub = be.watchQuery("bookings", [["date", "==", clasesDay]], o => { bookings = o; draw(); }, fail); };
   viewSubs.push(() => unsub?.());
   const draw = () => {
     const slots = slotsFor(clasesDay), staff = isStaff();
-    const days = staff ? 14 : (S.box.openDays ?? 2) + 1;
-    const from = staff ? addDays(today(), -3) : today();
+    const wk = Math.floor(Math.round((parse(clasesDay) - parse(weekStart(0))) / 864e5) / 7);
+    const minW = staff ? -4 : 0, maxW = staff ? 8 : 1;
+    const wkName = wk === 0 ? "Esta semana" : wk === 1 ? "Semana que viene" : wk === -1 ? "Semana pasada" : `Semana del ${fmtShort(weekStart(wk))}`;
     root.innerHTML = `<div class="h"><h2>Clases</h2><span class="sub">${fmtDay(clasesDay)}</span></div>
-      ${dayPicker(clasesDay, from, days)}
+      <div class="weeknav"><button class="btn sm ghost" data-wk="-1" ${wk <= minW ? "disabled" : ""} aria-label="Semana anterior">‹</button><b>${wkName}</b><button class="btn sm ghost" data-wk="1" ${wk >= maxW ? "disabled" : ""} aria-label="Semana siguiente">›</button></div>
+      ${dayPicker(clasesDay, weekStart(wk), 7, null, "week")}
+      ${!staff && !isOpenToBook(clasesDay) && clasesDay >= today() ? `<p class="small muted" style="margin:8px 2px 0">Puedes ver las clases de este día. Las reservas se abren el ${fmtDay(ymd(opensAt(clasesDay))).toLowerCase()} a las ${esc(S.box.openTime || "21:00")}.</p>` : ""}
       ${S.sched?.off?.[clasesDay] ? `<div class="card">${cara("Box cerrado", "Este día no hay clases.")}</div>` : ""}
       <div class="card" style="margin-top:10px">${slots.map(s => slotRow(clasesDay, s, bookings, { staff })).join("") || '<p class="empty">Este día no hay clases.</p>'}</div>
       ${!staff ? `<p class="small muted">Las reservas se abren ${S.box.openDays ?? 2} días antes a las ${esc(S.box.openTime || "21:00")}. Puedes cancelar hasta ${S.box.cancelHours ?? 2} h antes. Si la clase está llena, apúntate a la lista de espera: si alguien cancela, entras tú.</p>` : ""}`;
     bindDays(root, d => { clasesDay = d; listen(); draw(); });
+    root.querySelectorAll("[data-wk]").forEach(b => b.onclick = () => { const n = wk + Number(b.dataset.wk); clasesDay = n === 0 ? today() : weekStart(n); listen(); draw(); });
     bindSlots(root, clasesDay, bookings, slots);
   };
   if (isStaff() && !membersCache) queryV("members", [], o => { membersCache = o; });
@@ -839,6 +844,39 @@ function prParty({ lift, v, prev, sets, reps }) {
 
 /* ---------- view: PANEL DEL ATLETA (marcas, ranking, muro) ---------- */
 let panelSec = "marcas", rankLift = "Back squat", rankSex = "";
+let bodyMetric = "weight", bodyRange = "180", bodyPts = [];
+const METRICS = [{ id: "weight", name: "Peso", unit: "kg", min: 20, max: 300 }, { id: "fat", name: "Grasa", unit: "%", min: 2, max: 70 }, { id: "waist", name: "Cintura", unit: "cm", min: 30, max: 250 }];
+const RANGES = [["90", "3 meses"], ["180", "6 meses"], ["365", "1 año"], ["all", "Todo"]];
+// One-series line chart (SVG drawn at the container's real width) with a tap/hover tooltip.
+function lineChart(el, pts, unit) {
+  const W = Math.max(260, el.clientWidth), H = 190, L = 40, R = 14, T = 14, B = 26;
+  const xs = pts.map(p => parse(p.date).getTime()), vs = pts.map(p => p.v);
+  let mn = Math.min(...vs), mx = Math.max(...vs); const pad = Math.max(0.5, (mx - mn) * 0.15); mn -= pad; mx += pad;
+  const x0 = xs[0], x1 = xs[xs.length - 1] === x0 ? x0 + 864e5 : xs[xs.length - 1];
+  const X = t => L + (t - x0) / (x1 - x0) * (W - L - R), Y = v => T + (1 - (v - mn) / (mx - mn)) * (H - T - B);
+  const step = [0.5, 1, 2, 5, 10, 20].find(s => (mx - mn) / s <= 4) || 50;
+  const ticks = []; for (let v = Math.ceil(mn / step) * step; v <= mx; v += step) ticks.push(Math.round(v * 10) / 10);
+  const P = pts.map((p, i) => [X(xs[i]), Y(p.v)]);
+  const lastI = P.length - 1;
+  el.innerHTML = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Evolución: de ${kgTxt(vs[0])} a ${kgTxt(vs[lastI])} ${unit}">
+    ${ticks.map(v => `<line x1="${L}" x2="${W - R}" y1="${Y(v)}" y2="${Y(v)}" stroke="#E7E0E1" stroke-width="1"/><text x="${L - 6}" y="${Y(v) + 4}" text-anchor="end" font-size="11" fill="#7A6A6E">${kgTxt(v)}</text>`).join("")}
+    <text x="${L}" y="${H - 6}" font-size="11" fill="#7A6A6E">${fmtShort(pts[0].date)}</text><text x="${W - R}" y="${H - 6}" text-anchor="end" font-size="11" fill="#7A6A6E">${fmtShort(pts[lastI].date)}</text>
+    <path d="M${P.map(p => p.join(",")).join("L")}L${P[lastI][0]},${H - B}L${P[0][0]},${H - B}Z" fill="#4A1019" opacity=".07"/>
+    <polyline points="${P.map(p => p.join(",")).join(" ")}" fill="none" stroke="#4A1019" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+    ${P.length <= 40 ? P.map(p => `<circle cx="${p[0]}" cy="${p[1]}" r="3" fill="#4A1019" stroke="#fff" stroke-width="2"/>`).join("") : ""}
+    <circle cx="${P[lastI][0]}" cy="${P[lastI][1]}" r="5" fill="#C8102E" stroke="#fff" stroke-width="2"/>
+    <g id="hv" style="display:none"><line id="hvL" y1="${T}" y2="${H - B}" stroke="#8E4A57" stroke-width="1" stroke-dasharray="3 3"/><circle id="hvC" r="5" fill="#4A1019" stroke="#fff" stroke-width="2"/></g>
+    <rect x="${L}" y="0" width="${W - L - R}" height="${H}" fill="transparent" id="hvA"/></svg><div class="tip" id="hvT" hidden></div>`;
+  const a = el.querySelector("#hvA"), g = el.querySelector("#hv"), tip = el.querySelector("#hvT");
+  const show = ev => { const r = el.getBoundingClientRect(), mxp = (ev.touches?.[0] || ev).clientX - r.left;
+    let i = 0; P.forEach((p, j) => { if (Math.abs(p[0] - mxp) < Math.abs(P[i][0] - mxp)) i = j; });
+    g.style.display = ""; el.querySelector("#hvL").setAttribute("x1", P[i][0]); el.querySelector("#hvL").setAttribute("x2", P[i][0]);
+    el.querySelector("#hvC").setAttribute("cx", P[i][0]); el.querySelector("#hvC").setAttribute("cy", P[i][1]);
+    tip.hidden = false; tip.innerHTML = `<b>${kgTxt(vs[i])} ${unit}</b><br>${fmtShort(pts[i].date)}`;
+    tip.style.left = Math.min(W - 90, Math.max(0, P[i][0] - 40)) + "px"; tip.style.top = Math.max(0, P[i][1] - 52) + "px"; };
+  const hide = () => { g.style.display = "none"; tip.hidden = true; };
+  a.addEventListener("pointermove", show); a.addEventListener("pointerdown", show); a.addEventListener("pointerleave", hide);
+}
 const ytId = u => { const m = String(u || "").match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|embed\/|live\/))([\w-]{11})/); return m ? m[1] : null; };
 const cleanUrl = u => { u = String(u || "").trim(); return /^https:\/\/[^\s"'<>]+$/.test(u) ? u : ""; };
 function videoBox(url) {
@@ -865,7 +903,7 @@ function streakWeeks(mine) {
 }
 
 VIEWS.marcas = root => {
-  let mine = {}, pub = {}, monthB = {}, myRes = {};
+  let mine = {}, pub = {}, monthB = {}, myRes = {}, metrics = {};
   const draw = () => {
     const me = S.me, myBest = {};
     const mySets = {};
@@ -877,7 +915,7 @@ VIEWS.marcas = root => {
     const cls = Object.values(S.myBookings).filter(b => !b.wait && b.date <= today() && monthOf(b.date) === thisMonth()).length;
     const head = `<div class="card me-card"><div class="row"><span class="av big">${initials(me.name)}</span><div class="grow"><h3 style="margin:0">${esc(me.name)}</h3><span class="small muted">${esc(planOf(me.planId)?.name || "Atleta")} · CrossFit Iruña</span></div></div>
       <div class="mstats"><div><b>${cls}</b><span>clases en ${monthName(thisMonth())}</span></div><div><b>${streakWeeks(S.myBookings)}</b><span>semanas seguidas</span></div><div><b>${prsMonth}</b><span>PRs este mes</span></div></div></div>
-      <div class="tabs2"><button data-ps="marcas" aria-pressed="${panelSec === "marcas"}">Mis marcas</button><button data-ps="ranking" aria-pressed="${panelSec === "ranking"}">Ranking</button><button data-ps="muro" aria-pressed="${panelSec === "muro"}">Muro</button></div>`;
+      <div class="tabs2"><button data-ps="marcas" aria-pressed="${panelSec === "marcas"}">Marcas</button><button data-ps="cuerpo" aria-pressed="${panelSec === "cuerpo"}">Mi cuerpo</button><button data-ps="ranking" aria-pressed="${panelSec === "ranking"}">Ranking</button><button data-ps="muro" aria-pressed="${panelSec === "muro"}">Muro</button></div>`;
     let body = "";
     if (panelSec === "marcas") {
       const names = [...new Set([...LIFTS, ...Object.keys(myBest), ...Object.keys(mySets)])];
@@ -889,6 +927,26 @@ VIEWS.marcas = root => {
         ${recent.length ? `<div class="h"><h2>Últimas marcas</h2></div><div class="card"><div class="list">${recent.map(m => `<div class="li" style="cursor:default"><span class="grow"><span class="t">${esc(m.lift)}</span>${m.pr ? ' <span class="chip ok">¡PR!</span>' : ""}<br><span class="small muted">${fmtDay(m.date)}${isMax(m) ? " · máximo" : ""}${m.note ? " · " + esc(m.note) : ""}</span></span><b>${setsTxt(m)}</b></div>`).join("")}</div></div>` : ""}
         <div class="h"><h2>Mis WODs</h2><a href="#" class="small" data-go="historial">Ver todos</a></div>
         <div class="card">${res.length ? `<div class="list">${res.map(r => `<div class="li" style="cursor:default"><span class="grow"><span class="t">${esc(r.score)}</span> ${r.rx ? '<span class="chip">RX</span>' : ""}<br><span class="small muted">${fmtDay(r.date)}${r.note ? " · " + esc(r.note) : ""}</span></span><span class="small">👊 ${Object.keys(r.likes || {}).length}</span></div>`).join("")}</div>` : '<p class="empty">Cuando apuntes resultados de WODs aparecerán aquí.</p>'}</div>`;
+    }
+    if (panelSec === "cuerpo") {
+      const M = METRICS.find(x => x.id === bodyMetric) || METRICS[0];
+      const all = Object.entries(metrics).map(([id, x]) => ({ id, ...x })).sort((a, b) => a.date.localeCompare(b.date) || a.at.localeCompare(b.at));
+      const has = METRICS.filter(x => all.some(e => e[x.id] != null));
+      const pts = all.filter(e => e[M.id] != null && (bodyRange === "all" || e.date >= addDays(today(), -Number(bodyRange))));
+      const last = pts[pts.length - 1], first = pts[0];
+      const diff = last && first && pts.length > 1 ? Math.round((last[M.id] - first[M.id]) * 10) / 10 : null;
+      body = `<button class="btn primary block" id="newM" style="margin-bottom:12px">＋ Apuntar mis medidas</button>
+        ${all.length ? `<div class="card">
+          ${has.length > 1 ? `<div class="gseg ${has.length === 3 ? "g3" : ""}" style="margin-bottom:12px">${has.map(x => `<button data-bm="${x.id}" aria-pressed="${x.id === M.id}">${x.name}</button>`).join("")}</div>` : ""}
+          <div class="row between" style="align-items:flex-end"><div><span class="small muted">${esc(M.name)}${last ? ` · ${fmtShort(last.date)}` : ""}</span><div class="bignum">${last ? `${kgTxt(last[M.id])}<small> ${M.unit}</small>` : "—"}</div></div>
+            ${diff != null ? `<span class="chip ${diff === 0 ? "grey" : ""}">${diff > 0 ? "+" : ""}${kgTxt(diff)} ${M.unit} ${bodyRange === "all" ? "desde el principio" : `en ${RANGES.find(r => r[0] === bodyRange)[1].toLowerCase()}`}</span>` : ""}</div>
+          <div class="seg rng" style="margin:10px 0 4px">${RANGES.map(([v, l]) => `<button data-br="${v}" aria-pressed="${v === bodyRange}">${l}</button>`).join("")}</div>
+          ${pts.length > 1 ? `<div class="lchart" id="bChart" data-unit="${M.unit}"></div>` : `<p class="empty">${pts.length ? "Apunta otra medida y verás tu evolución en una gráfica." : `No hay medidas de ${M.name.toLowerCase()} en este periodo.`}</p>`}
+        </div>
+        <div class="h"><h2>Historial</h2><span class="sub">Solo lo ves tú</span></div>
+        <div class="card"><div class="list">${all.slice().reverse().slice(0, 12).map(e => `<div class="li" style="cursor:default"><span class="grow"><span class="t">${fmtDay(e.date)}</span><br><span class="small muted">${METRICS.filter(x => e[x.id] != null).map(x => `${x.name}: ${kgTxt(e[x.id])} ${x.unit}`).join(" · ")}${e.note ? " · " + esc(e.note) : ""}</span></span><button class="btn sm danger" data-dm="${e.id}" aria-label="Borrar">✕</button></div>`).join("")}</div></div>`
+        : `<div class="card">${cara("Tu evolución", "Apunta tu peso (y si quieres, tu % de grasa y tu cintura) de vez en cuando y verás cómo cambias. Solo lo ves tú.")}</div>`}`;
+      bodyPts = pts.map(e => ({ date: e.date, v: e[M.id] }));
     }
     if (panelSec === "ranking") {
       const lifts = [...new Set([...LIFTS, ...Object.values(pub).map(m => m.lift)])];
@@ -915,6 +973,11 @@ VIEWS.marcas = root => {
     }
     root.innerHTML = `<div class="h"><h2>Mi panel</h2></div>${head}${body}`;
     root.querySelectorAll("[data-ps]").forEach(b => b.onclick = () => { panelSec = b.dataset.ps; draw(); });
+    if ($("#bChart")) lineChart($("#bChart"), bodyPts, $("#bChart").dataset.unit);
+    root.querySelectorAll("[data-bm]").forEach(b => b.onclick = () => { bodyMetric = b.dataset.bm; draw(); });
+    root.querySelectorAll("[data-br]").forEach(b => b.onclick = () => { bodyRange = b.dataset.br; draw(); });
+    root.querySelectorAll("[data-dm]").forEach(b => b.onclick = async () => { if (await confirmDlg("Borrar medida", "¿Borramos esta medida?", "Borrar")) safe(() => be.del("metrics/" + b.dataset.dm)); });
+    $("#newM")?.addEventListener("click", () => metricForm());
     root.querySelectorAll("[data-go]").forEach(b => b.onclick = e => { e.preventDefault(); go(b.dataset.go); });
     root.querySelectorAll("[data-l]").forEach(b => b.onclick = () => liftDlg(b.dataset.l));
     $("#newPR")?.addEventListener("click", () => markForm());
@@ -953,6 +1016,24 @@ VIEWS.marcas = root => {
       };
     });
   };
+  const metricForm = () => {
+    const lastOf = id => Object.values(metrics).filter(e => e[id] != null).sort((a, b) => b.date.localeCompare(a.date))[0]?.[id];
+    openDlg(`<h3>Mis medidas</h3><p class="small muted" style="margin-top:0">Rellena solo lo que quieras. Solo lo ves tú.</p><form id="bmf">
+      <label>Fecha<input id="bD" type="date" value="${today()}" max="${today()}" required></label>
+      <div class="grid3">${METRICS.map(x => `<label>${x.name} (${x.unit})<input id="b_${x.id}" type="number" step="0.1" min="${x.min}" max="${x.max}" inputmode="decimal" placeholder="${lastOf(x.id) != null ? kgTxt(lastOf(x.id)) : ""}"></label>`).join("")}</div>
+      <label>Nota (opcional)<input id="bN" maxlength="100" placeholder="Ej.: en ayunas"></label>
+      <div class="err" id="bE"></div>
+      <div class="dlgbtns"><button type="button" class="btn" id="bX">Cancelar</button><button class="btn primary">Guardar</button></div></form>`, () => {
+      $("#bX").onclick = closeDlg;
+      $("#bmf").onsubmit = async e => { e.preventDefault();
+        const doc = { uid: S.user.uid, date: $("#bD").value, note: $("#bN").value.trim(), at: new Date().toISOString() };
+        for (const x of METRICS) { const v = parseFloat($("#b_" + x.id).value); doc[x.id] = isNaN(v) ? null : v; }
+        if (METRICS.every(x => doc[x.id] == null)) { $("#bE").textContent = "Apunta al menos una medida."; return; }
+        await safe(() => be.add("metrics", doc)); closeDlg();
+        const prevW = lastOf("weight"); toast(doc.weight != null && prevW != null ? `Guardado. ${doc.weight < prevW ? "−" : "+"}${kgTxt(Math.abs(Math.round((doc.weight - prevW) * 10) / 10))} kg desde la última vez.` : "Medidas guardadas.");
+      };
+    });
+  };
   const liftDlg = name => {
     const all = Object.entries(mine).filter(([, m]) => m.lift === name).map(([id, m]) => ({ id, ...m })).sort((a, b) => a.date.localeCompare(b.date));
     if (!all.length) return markForm(name);
@@ -978,6 +1059,7 @@ VIEWS.marcas = root => {
   queryV("marks", [["public", "==", true]], o => { pub = o; if (!dlg.open) draw(); });
   queryV("bookings", [["date", ">=", thisMonth() + "-01"]], o => { monthB = o; if (panelSec === "ranking" && !dlg.open) draw(); });
   queryV("results", [["uid", "==", S.user.uid]], o => { myRes = o; if (!dlg.open) draw(); });
+  queryV("metrics", [["uid", "==", S.user.uid]], o => { metrics = o; if (!dlg.open) draw(); });
   return { draw };
 };
 
