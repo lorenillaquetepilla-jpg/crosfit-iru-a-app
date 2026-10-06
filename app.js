@@ -281,7 +281,7 @@ async function book(date, slot, list) {
   const me = S.me;
   if (me.status !== "active") return toast("Tu alta está pendiente. El box tiene que asignarte una tarifa.");
   if (!isOpenToBook(date)) return toast(`Las reservas de esta clase se abren el ${fmtDay(ymd(opensAt(date))).toLowerCase()} a las ${S.box.openTime || "21:00"}.`);
-  const perDay = S.box.maxPerDay ?? 1;
+  const perDay = perDayOf(me);
   const sameDay = Object.values(S.myBookings).filter(b => b.date === date && b.slotId !== slot.id);
   if (perDay > 0 && sameDay.length >= perDay) return toast(perDay === 1
     ? `Ya tienes reserva ese día a las ${sameDay[0].s}. Solo se puede reservar una clase al día: cancela esa si quieres cambiarte.`
@@ -321,6 +321,9 @@ async function cancelBooking(date, slot, bookingId, list, byStaff = false) {
   toast(wasIn && list.wait[0] ? `Reserva cancelada. Tu plaza es ahora de ${firstName(list.wait[0].name)}.` : "Reserva cancelada.");
 }
 
+// Daily booking limit: the member's own (set by a coach) or the box's. 0 = no limit.
+const perDayOf = m => m?.maxPerDay ?? S.box?.maxPerDay ?? 2;
+const perDayTxt = n => n === 0 ? "Sin límite" : n === 1 ? "1 clase al día" : `${n} clases al día`;
 const fetchQuery = (c, f) => new Promise((res, rej) => { let un = null, done = false; un = be.watchQuery(c, f, o => { if (done) return; done = true; res(o); setTimeout(() => un?.(), 0); }, rej); });
 async function cancelMine(b) {
   const slot = (S.sched?.slots || []).find(s => s.id === b.slotId) || { id: b.slotId, s: b.s, e: b.s, cap: 99 };
@@ -371,10 +374,11 @@ function manageSlot(date, slot, bookings) {
   const draw = () => {
     const list = splitList(bookings, slot), off = isOff(date, slot);
     openDlg(`<h3>${esc(typeOf(slot.type).name)} · ${slot.s}</h3><p class="muted small">${fmtDay(date)} · ${list.inn.length}/${slot.cap} plazas</p>
-      <div class="list">${list.inn.map(b => `<div class="li"><span class="av">${initials(b.name)}</span><span class="grow t">${esc(b.name)}${b.credit ? ' <span class="chip grey">bono</span>' : ""}</span>
+      <div class="list">${list.inn.map(b => `<div class="li"><span class="av">${initials(b.name)}</span><span class="grow t">${esc(b.name)}${b.credit ? ' <span class="chip grey">bono</span>' : ""}${b.trial ? ' <span class="chip warn">prueba</span>' : ""}</span>
         <button class="btn sm ${b.attended ? "primary" : ""}" data-att="${b.id}">${b.attended ? "✓ Ha venido" : "¿Ha venido?"}</button><button class="btn sm danger" data-rm="${b.id}" aria-label="Quitar">✕</button></div>`).join("") || '<p class="empty">Nadie apuntado todavía.</p>'}</div>
       ${list.wait.length ? `<h4 style="margin-top:12px">Lista de espera</h4><div class="list">${list.wait.map((b, i) => `<div class="li"><span class="av">${i + 1}º</span><span class="grow">${esc(b.name)}</span><button class="btn sm danger" data-rm="${b.id}">✕</button></div>`).join("")}</div>` : ""}
       <label>Apuntar a un socio</label><div class="row"><select id="addM" class="grow"><option value="">Elige un socio…</option>${Object.entries(membersCache || {}).filter(([, m]) => m.status === "active" && m.role === "athlete").sort((a, b) => a[1].name.localeCompare(b[1].name)).map(([id, m]) => `<option value="${id}">${esc(m.name)}</option>`).join("")}</select><button class="btn" id="addB">Apuntar</button></div>
+      <button class="btn block" id="trB" style="margin-top:10px">🎟️ Reservar una clase de prueba</button>
       <div class="dlgbtns"><button class="btn ${off ? "" : "danger"}" id="offB">${off ? "Volver a abrir la clase" : "Cancelar esta clase"}</button><button class="btn primary" id="cl">Cerrar</button></div>`, b => {
       $("#cl").onclick = closeDlg;
       b.querySelectorAll("[data-att]").forEach(x => x.onclick = async () => { const bk = bookings[x.dataset.att]; await safe(() => be.merge("bookings/" + x.dataset.att, { attended: !bk.attended })); bk.attended = !bk.attended; draw(); });
@@ -385,6 +389,23 @@ function manageSlot(date, slot, bookings) {
         const doc = { date, slotId: slot.id, uid: id, name: m.name, type: slot.type, s: slot.s, at: new Date().toISOString(), wait: full, credit: false };
         await safe(() => be.set(`bookings/${date}__${slot.id}__${id}`, doc)); bookings[`${date}__${slot.id}__${id}`] = doc; draw();
       };
+      $("#trB").onclick = () => openDlg(`<h3>Clase de prueba</h3><p class="small muted" style="margin-top:0">${esc(typeOf(slot.type).name)} · ${fmtDay(date)} a las ${slot.s}. Ocupa una plaza de la clase.</p><form id="trF">
+        <label>Nombre<input id="tN" required maxlength="80" placeholder="Nombre y apellidos"></label>
+        <label>Correo (opcional)<input id="tE" type="email" maxlength="120" placeholder="Le mandamos la confirmación"></label>
+        <label>Teléfono (opcional)<input id="tP" type="tel" maxlength="20"></label>
+        <div class="dlgbtns"><button type="button" class="btn" id="tX">Volver</button><button class="btn primary">Reservar prueba</button></div></form>`, () => {
+        $("#tX").onclick = draw;
+        $("#trF").onsubmit = async e => { e.preventDefault();
+          const uid = "trial-" + Math.random().toString(36).slice(2, 9), id = `${date}__${slot.id}__${uid}`, name = $("#tN").value.trim();
+          const full = splitList(bookings, slot).inn.length >= slot.cap;
+          const doc = { date, slotId: slot.id, uid, name, type: slot.type, s: slot.s, at: new Date().toISOString(), wait: full, credit: false, trial: true };
+          await safe(async () => {
+            await be.set("bookings/" + id, doc);
+            await be.set("trials/" + id, { name, email: $("#tE").value.trim().toLowerCase(), phone: $("#tP").value.trim(), date, slotId: slot.id, s: slot.s, type: slot.type, by: S.user.uid, at: doc.at });
+          });
+          bookings[id] = doc; toast(full ? `${firstName(name)} está en lista de espera.` : `Clase de prueba reservada para ${firstName(name)}.${$("#tE").value.trim() && !be.demo ? " Le llega un correo." : ""}`); draw();
+        };
+      });
       $("#offB").onclick = async () => { await safe(() => be.merge("config/schedule", { off: { [`${date}__${slot.id}`]: !off } })); closeDlg(); toast(off ? "Clase abierta de nuevo." : "Clase cancelada. Los socios la verán tachada."); };
     });
   };
@@ -873,7 +894,7 @@ VIEWS.marcas = root => {
       const lifts = [...new Set([...LIFTS, ...Object.values(pub).map(m => m.lift)])];
       const list = bestBy(Object.fromEntries(Object.entries(pub).filter(([, m]) => isMax(m) && m.lift === rankLift && (!rankSex || m.sex === rankSex))));
       const myPos = list.findIndex(m => m.uid === S.user.uid);
-      const att = {}; for (const b of Object.values(monthB)) if (!b.wait && b.date <= today()) { (att[b.uid] ||= { n: 0, name: b.name }).n++; }
+      const att = {}; for (const b of Object.values(monthB)) if (!b.wait && !b.trial && b.date <= today()) { (att[b.uid] ||= { n: 0, name: b.name }).n++; }
       const attList = Object.entries(att).sort((a, b) => b[1].n - a[1].n).slice(0, 10);
       body = `<div class="card"><div class="grid2"><label style="margin-top:0">Ejercicio<select id="rkL">${lifts.map(l => `<option ${l === rankLift ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
           <label style="margin-top:0">Categoría<select id="rkS"><option value="">Todos</option><option value="f" ${rankSex === "f" ? "selected" : ""}>Chicas</option><option value="m" ${rankSex === "m" ? "selected" : ""}>Chicos</option></select></label></div>
@@ -1334,14 +1355,16 @@ VIEWS.socios = root => {
     root.innerHTML = `<div class="h"><h2>Socios</h2><span class="sub">${count("todos")} en el box</span></div>
       <div class="seg" style="margin-bottom:10px">${Object.keys(L).filter(k => isAdmin() || (k !== "impago" && k !== "invitados")).filter(k => k !== "invitados" || count(k)).map(k => `<button data-f="${k}" aria-pressed="${sociosFilter === k}">${L[k]} <span>${count(k)}</span></button>`).join("")}</div>
       <input class="search" id="sq" type="search" placeholder="Buscar por nombre…" value="${esc(sociosQ)}">
+      <div class="card row" style="padding:10px 14px;gap:10px"><span class="grow small"><b>Reservas por persona</b><br><span class="muted">Para todos. Para un socio, ábrelo en la lista.</span></span><select id="gPD" style="width:auto">${[1, 2, 3, 0].map(v => `<option value="${v}" ${(S.box?.maxPerDay ?? 2) === v ? "selected" : ""}>${perDayTxt(v)}</option>`).join("")}</select></div>
       ${sociosFilter === "invitados" ? `<div class="card"><p class="small muted" style="margin-top:0">Socios importados que aún no han entrado en la app. Cuando creen su cuenta con este correo, entrarán directos con su tarifa.</p>
         ${inv.length ? `<div class="list">${inv.map(([id, m]) => `<button class="li" data-inv="${esc(id)}"><span class="av">${initials(m.name)}</span><span class="grow"><span class="t">${esc(m.name)}</span><br><span class="small muted">${esc(m.email)} · ${planOf(m.planId) ? esc(planOf(m.planId).name) : "Sin tarifa"}</span></span><span class="chip grey">Sin registrar</span></button>`).join("")}</div>` : '<p class="empty">No hay nadie en esta lista.</p>'}</div>` : `
       <div class="card">${list.length ? `<div class="list">${list.map(([id, m]) => { const p = planOf(m.planId);
         return `<button class="li" data-m="${id}"><span class="av">${initials(m.name)}</span><span class="grow"><span class="t">${esc(m.name)}</span>${m.role !== "athlete" ? ` <span class="chip">${m.role === "admin" ? "Dueño" : "Coach"}</span>` : ""}<br>
-          <span class="small muted">${p ? esc(p.name) : m.role === "athlete" ? "Sin tarifa" : ""}${m.role === "athlete" && m.status === "active" ? ` · ${seen[id] ? `vino el ${fmtShort(seen[id])}` : "sin venir"}` : ""}</span></span>
+          <span class="small muted">${p ? esc(p.name) : m.role === "athlete" ? "Sin tarifa" : ""}${m.maxPerDay != null ? ` · ${perDayTxt(m.maxPerDay).toLowerCase()}` : ""}${m.role === "athlete" && m.status === "active" ? ` · ${seen[id] ? `vino el ${fmtShort(seen[id])}` : "sin venir"}` : ""}</span></span>
           ${m.status === "pending" ? '<span class="chip warn">Nuevo</span>' : m.status === "baja" ? '<span class="chip grey">Baja</span>' : m.role === "athlete" && m.planId && isAdmin() ? (paidFor(m) ? '<span class="chip ok">Pagado</span>' : '<span class="chip bad">Pendiente</span>') : ""}</button>`; }).join("")}</div>` : '<p class="empty">No hay nadie en esta lista.</p>'}</div>`}
       ${isAdmin() ? `<button class="btn block" id="imp">📥 Importar socios desde Excel</button>` : ""}`;
     $("#imp")?.addEventListener("click", () => importDlg(members, invites));
+    $("#gPD").onchange = e => safe(async () => { await be.merge("config/box", { maxPerDay: Number(e.target.value) }); toast(`Ahora: ${perDayTxt(Number(e.target.value)).toLowerCase()} para todos.`); });
     root.querySelectorAll("[data-inv]").forEach(b => b.onclick = () => inviteDlg(b.dataset.inv, invites[b.dataset.inv]));
     root.querySelectorAll("[data-f]").forEach(b => b.onclick = () => { sociosFilter = b.dataset.f; draw(); });
     const sq = $("#sq"); sq.oninput = () => { sociosQ = sq.value; const pos = sq.selectionStart; draw(); const n = $("#sq"); n.focus(); n.setSelectionRange(pos, pos); };
@@ -1355,6 +1378,7 @@ VIEWS.socios = root => {
       <div class="quota"><div class="qbox"><div class="n">${mb.length}</div><div class="l">clases en ${monthName(thisMonth())}${p?.classes != null && p ? ` (tarifa: ${p.classes} + ${p.open ?? "∞"} Open)` : ""}</div></div>
       <div class="qbox"><div class="n">${seen ? fmtShort(seen) : "—"}</div><div class="l">última clase</div></div></div>
       <form id="mf">
+        <label>Reservas al día<select id="mPD"><option value="">Como el box (${perDayTxt(S.box?.maxPerDay ?? 2).toLowerCase()})</option>${[1, 2, 3, 0].map(v => `<option value="${v}" ${m.maxPerDay === v ? "selected" : ""}>${perDayTxt(v)}</option>`).join("")}</select></label>
         <div class="grid2"><label>Tarifa<select id="mPlan" ${isAdmin() ? "" : "disabled"}><option value="">Sin tarifa</option>${plans().map(x => `<option value="${x.id}" ${m.planId === x.id ? "selected" : ""}>${esc(x.name)} · ${money(x.price)}</option>`).join("")}</select></label>
         <label>Estado<select id="mSt"><option value="active" ${m.status === "active" ? "selected" : ""}>Activo</option><option value="pending" ${m.status === "pending" ? "selected" : ""}>Pendiente de alta</option><option value="baja" ${m.status === "baja" ? "selected" : ""}>Baja</option></select></label></div>
         ${isAdmin() ? `<div class="grid2"><label>Rol<select id="mRole"><option value="athlete" ${m.role === "athlete" ? "selected" : ""}>Atleta</option><option value="coach" ${m.role === "coach" ? "selected" : ""}>Coach</option><option value="admin" ${m.role === "admin" ? "selected" : ""}>Dueño / admin</option></select></label>
@@ -1367,7 +1391,7 @@ VIEWS.socios = root => {
         <button class="btn block" style="margin-top:10px" ${p ? "" : "disabled"}>💶 Apuntar pago de ${monthName(m.paidUntil && m.paidUntil >= thisMonth() ? addMonths(m.paidUntil, 1) : thisMonth())}</button></form>` : ""}`, () => {
       $("#mC").onclick = closeDlg;
       $("#mf").onsubmit = async e => { e.preventDefault();
-        const upd = { status: $("#mSt").value };
+        const upd = { status: $("#mSt").value, maxPerDay: $("#mPD").value === "" ? null : Number($("#mPD").value) };
         if (isAdmin()) { upd.planId = $("#mPlan").value || null; upd.role = $("#mRole").value; upd.extra = Math.max(0, parseInt($("#mEx").value) || 0); }
         if (id === S.user.uid && upd.role && upd.role !== "admin") return toast("No puedes quitarte a ti mismo el rol de dueño.");
         await safe(() => be.merge("members/" + id, upd)); closeDlg(); toast("Socio actualizado."); };
@@ -1500,7 +1524,7 @@ VIEWS.box = root => {
           <label>Cancelar hasta (horas antes)<input id="cH" type="number" min="0" max="48" value="${box.cancelHours ?? 2}"></label>
           <div class="grid2"><label>Las reservas se abren (días antes)<input id="oD" type="number" min="0" max="30" value="${box.openDays ?? 2}"></label><label>a las<input id="oT" type="time" step="300" value="${box.openTime || "21:00"}"></label></div>
           <p class="small muted" style="margin:4px 0 0">Ahora: la clase del miércoles se puede reservar desde el lunes a las ${esc(box.openTime || "21:00")}.</p>
-          <label>Reservas máximas por persona y día<select id="mD">${[[1, "1 clase al día"], [2, "2 clases al día"], [0, "Sin límite"]].map(([v, l]) => `<option value="${v}" ${(box.maxPerDay ?? 1) === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+          <label>Reservas máximas por persona y día<select id="mD">${[1, 2, 3, 0].map(v => `<option value="${v}" ${(box.maxPerDay ?? 2) === v ? "selected" : ""}>${perDayTxt(v)}</option>`).join("")}</select></label>
           <label>Enlace para reseñas de Google<input id="rU" type="url" maxlength="300" value="${esc(box.reviewUrl || "")}" placeholder="https://g.page/r/…/review"></label>
           <p class="small muted" style="margin:4px 0 0">Lo sacas en Google Business Profile → "Pedir reseñas". Al acabar la clase, la app invita a los socios a valorar el box.</p>
           <label class="check" style="margin-top:12px"><input type="checkbox" id="bU" ${box.blockUnpaid !== false ? "checked" : ""}> No dejar reservar si la cuota del mes está sin pagar</label></div>

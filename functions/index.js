@@ -175,3 +175,18 @@ exports.bookingPromoted = onDocumentUpdated({ ...DB_OPTS, document: "bookings/{i
   const a = ev.data.before.data(), b = ev.data.after.data();
   if (a?.wait && b && !b.wait) await bookingMail(b, "promoted").catch(e => console.error("mail", e.message));
 });
+
+// Clase de prueba reservada por un coach: confirmación al correo de la persona, si lo dejó.
+exports.trialBooked = onDocumentCreated({ ...DB_OPTS, document: "trials/{id}" }, async ev => {
+  const t = ev.data?.data(); if (!t?.email) return;
+  const ss = await db.doc("config/schedule").get();
+  const slot = (ss.data()?.slots || []).find(s => s.id === t.slotId) || { s: t.s, e: t.s };
+  const html = `<div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;color:#1B0D10">
+    <div style="background:#4A1019;color:#fff;padding:18px 22px;border-radius:12px 12px 0 0;font-size:20px;font-weight:bold">${esc(BOX)}</div>
+    <div style="border:1px solid #eadfe1;border-top:0;padding:22px;border-radius:0 0 12px 12px">
+      <p style="font-size:17px;margin:0 0 12px">¡Aupa, ${esc(String(t.name).split(" ")[0])}! Te esperamos en tu clase de prueba gratis.</p>
+      <p style="font-size:20px;font-weight:bold;margin:0 0 12px;color:#4A1019">${esc(dayTxt(t.date))} de ${slot.s} a ${slot.e}</p>
+      <p style="margin:0;color:#5A4247">Ven con ropa cómoda y 10 minutos antes. Si no puedes venir, responde a este correo.</p></div></div>`;
+  const tr = nodemailer.createTransport({ host: process.env.SMTP_HOST || "smtp.gmail.com", port: 465, secure: true, auth: { user: SMTP_USER.value(), pass: SMTP_PASS.value() } });
+  await tr.sendMail({ from: `"${BOX}" <${SMTP_USER.value()}>`, to: t.email, subject: `Tu clase de prueba en ${BOX}: ${dayTxt(t.date)} a las ${slot.s}`, html }).catch(e => console.error("mail", e.message));
+});

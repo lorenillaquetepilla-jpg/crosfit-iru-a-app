@@ -3,7 +3,8 @@ export const DEFAULT_BOX = {
   name: "CrossFit Iruña",
   cancelHours: 2,     // hasta cuántas horas antes se puede cancelar una reserva
   openDays: 2,        // las reservas de una clase se abren estos días antes…
-  openTime: "21:00",  // …a esta hora (la del miércoles se abre el lunes a las 21:00)
+  openTime: "21:00",
+  maxPerDay: 2,       // reservas máximas por persona y día (0 = sin límite); se puede cambiar por socio  // …a esta hora (la del miércoles se abre el lunes a las 21:00)
   discounts: { semester: 6, year: 10 },
   plans: [
     { id: "p1", name: "Pack 1", price: 59, classes: 4, open: 4 },

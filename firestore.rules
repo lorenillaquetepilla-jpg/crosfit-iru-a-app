@@ -20,7 +20,7 @@ service cloud.firestore {
     match /config/box {
       allow read: if signedIn();
       allow create: if signedIn() && !exists(/databases/$(database)/documents/config/setup);
-      allow update: if isAdmin();
+      allow update: if isAdmin() || (isStaff() && onlyChanges(['maxPerDay']));
     }
     match /config/schedule {
       allow read: if signedIn();
@@ -41,7 +41,7 @@ service cloud.firestore {
           && request.resource.data.planId == myInvite().planId && request.resource.data.paidUntil == null && request.resource.data.extra == 0
           && !('stripeCustomer' in request.resource.data)));
       allow update: if isAdmin()
-        || (isStaff() && onlyChanges(['status']) && resource.data.role == 'athlete')
+        || (isStaff() && onlyChanges(['status', 'maxPerDay']) && resource.data.role == 'athlete')
         || (signedIn() && request.auth.uid == uid && onlyChanges(['name', 'phone', 'sex', 'mailBookings', 'reviewDone', 'reviewSnooze']));
       allow delete: if isAdmin();
     }
@@ -107,6 +107,11 @@ service cloud.firestore {
     match /invites/{email} {
       allow get, delete: if signedIn() && request.auth.token.email != null && email == myEmail();
       allow list, write: if isAdmin();
+    }
+
+    // trials/{bookingId}: people coming to a free trial class, booked by a coach.
+    match /trials/{id} {
+      allow read, write: if isStaff();
     }
 
     match /notices/{id} {
