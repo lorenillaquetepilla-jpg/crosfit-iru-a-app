@@ -16,9 +16,11 @@ export function makeBackend(cfg) {
   return {
     demo: false,
     payments: !!cfg.stripe,
-    onAuth: cb => A.onAuthStateChanged(auth, u => cb(u ? { uid: u.uid, email: u.email } : null)),
+    onAuth: cb => A.onAuthStateChanged(auth, u => cb(u ? { uid: u.uid, email: u.email, emailVerified: u.emailVerified } : null)),
     signIn: (e, p) => A.signInWithEmailAndPassword(auth, e, p),
-    signUp: (e, p) => A.createUserWithEmailAndPassword(auth, e, p),
+    signUp: async (e, p) => { const r = await A.createUserWithEmailAndPassword(auth, e, p); await A.sendEmailVerification(r.user).catch(() => {}); return r; },
+    verifyEmail: () => A.sendEmailVerification(auth.currentUser),
+    refreshUser: async () => { await auth.currentUser.reload(); await auth.currentUser.getIdToken(true); return auth.currentUser.emailVerified; },
     signOut: () => A.signOut(auth),
     reset: e => A.sendPasswordResetEmail(auth, e),
     get: async p => { const s = await F.getDoc(d(p)); return s.exists() ? s.data() : null; },

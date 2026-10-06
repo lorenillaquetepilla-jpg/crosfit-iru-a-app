@@ -7,35 +7,41 @@ service cloud.firestore {
     function isStaff() { return isMember() && me().role in ['admin', 'coach']; }
     function isAdmin() { return isMember() && me().role == 'admin'; }
     function isActive() { return isMember() && me().status == 'active'; }
+    // CAMBIAR antes de publicar: el correo del dueño del box. Solo esa cuenta (con el correo confirmado) puede configurar la app la primera vez.
+    function ownerEmail() { return 'PON_AQUI_EL_CORREO_DEL_DUENO'; }
+    function isOwnerSetup() { return signedIn() && request.auth.token.email_verified == true && myEmail() == ownerEmail().lower()
+      && !exists(/databases/$(database)/documents/config/setup); }
     function myEmail() { return request.auth.token.email.lower(); }
-    function myInvite() { return exists(/databases/$(database)/documents/invites/$(myEmail())) ? get(/databases/$(database)/documents/invites/$(myEmail())).data : null; }
+    function myInvite() { return request.auth.token.email_verified != true ? null : !exists(/databases/$(database)/documents/invites/$(myEmail())) ? null : get(/databases/$(database)/documents/invites/$(myEmail())).data; }
     function onlyChanges(keys) { return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys); }
 
     // First account becomes the owner; after that config/setup exists and nobody can do it again.
     match /config/setup {
       allow read: if signedIn();
-      allow create: if signedIn() && !exists(/databases/$(database)/documents/config/setup)
+      allow create: if isOwnerSetup()
         && getAfter(/databases/$(database)/documents/members/$(request.auth.uid)).data.role == 'admin';
     }
     match /config/box {
       allow read: if signedIn();
-      allow create: if signedIn() && !exists(/databases/$(database)/documents/config/setup);
+      allow create: if isOwnerSetup();
       allow update: if isAdmin() || (isStaff() && onlyChanges(['maxPerDay']));
     }
     match /config/schedule {
       allow read: if signedIn();
-      allow create: if signedIn() && !exists(/databases/$(database)/documents/config/setup);
+      allow create: if isOwnerSetup();
       allow update: if isAdmin() || (isStaff() && onlyChanges(['off']));
     }
 
     match /members/{uid} {
       allow read: if (signedIn() && request.auth.uid == uid) || isStaff();
       // A new athlete signs up as pending, with no plan, credits or payments.
-      allow create: if signedIn() && request.auth.uid == uid && (
+      allow create: if signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['role', 'name', 'phone', 'email', 'sex', 'status', 'planId', 'paidUntil', 'extra', 'joined', 'imported'])
+        && request.resource.data.email == request.auth.token.email && (
         (request.resource.data.role == 'athlete' && request.resource.data.status == 'pending'
           && request.resource.data.planId == null && request.resource.data.paidUntil == null && request.resource.data.extra == 0
           && !('stripeCustomer' in request.resource.data))
-        || (request.resource.data.role == 'admin' && !exists(/databases/$(database)/documents/config/setup))
+        || (request.resource.data.role == 'admin' && isOwnerSetup())
         // A member imported from Aimharder enters straight away with the plan the box gave them.
         || (request.resource.data.role == 'athlete' && request.resource.data.status == 'active' && myInvite() != null
           && request.resource.data.planId == myInvite().planId && request.resource.data.paidUntil == null && request.resource.data.extra == 0
@@ -46,15 +52,13 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // bookings/{date}__{slotId}__{uid}
+    // bookings/{date}__{slotId}__{uid}. Athletes book through the "book" function, which checks the box rules
+    // (paid fee, plan classes, opening time, daily limit, places). Here they can only cancel their own, before the deadline.
     match /bookings/{id} {
       allow read: if isMember();
-      allow create: if (isActive() && request.resource.data.uid == request.auth.uid && id.matches('.*__' + request.auth.uid)
-          && request.resource.data.attended != true)
-        || isStaff();
-      allow delete: if (signedIn() && resource.data.uid == request.auth.uid) || isStaff();
-      // Anyone cancelling can move the first person on the waiting list into the class.
-      allow update: if isStaff() || (isActive() && onlyChanges(['wait', 'promoted']) && request.resource.data.wait == false);
+      allow create, update: if isStaff();
+      allow delete: if isStaff() || (signedIn() && resource.data.uid == request.auth.uid
+        && (!('cutoff' in resource.data) || request.time < resource.data.cutoff));
     }
 
     match /wods/{date} {

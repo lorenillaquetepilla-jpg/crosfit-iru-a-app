@@ -6,11 +6,22 @@ App web instalable (PWA) para CrossFit Iruña: reservas con lista de espera, WOD
 - Alojamiento: GitHub Pages (gratis). Datos y usuarios: Firebase. Pagos: Stripe.
 
 ## Puesta en marcha
-1. Crear un proyecto en https://console.firebase.google.com (a nombre del box).
+1. Crear un proyecto en https://console.firebase.google.com (a nombre del box) y pasarlo al plan **Blaze** (las reservas, los cobros y los correos se hacen en el servidor; con el uso de un box suele salir a 0 €).
 2. Añadir una app web (`</>`) y copiar `firebaseConfig` en `firebase-config.js`.
-3. Authentication → Correo electrónico/contraseña → Habilitar. Añadir el dominio de GitHub Pages en Dominios autorizados.
-4. Firestore → Crear base de datos (europe-west) → pegar `firestore.rules` en Reglas → Publicar.
-5. Abrir la app, crear cuenta y pulsar «Configurar CrossFit Iruña»: esa cuenta queda como dueño.
+3. Authentication → Correo electrónico/contraseña → Habilitar. Añadir el dominio de la app en Dominios autorizados.
+4. En `firestore.rules`, cambiar `PON_AQUI_EL_CORREO_DEL_DUENO` por el correo del dueño. Solo esa cuenta, con el correo confirmado, puede configurar la app la primera vez.
+5. Firestore → Crear base de datos (Madrid, `europe-southwest1`) → `firebase deploy --only firestore:rules`.
+6. En `functions/.env` poner `APP_URL=https://…` (la dirección exacta de la app) y desplegar: `firebase deploy --only functions`.
+7. Abrir la app con el correo del dueño, crear cuenta, confirmar el correo y pulsar «Configurar CrossFit Iruña».
+
+## Seguridad
+- Cada socio solo ve sus datos (ficha, pagos, medidas). Los coaches ven las fichas de los socios; las cuotas y los cobros, solo el dueño.
+- Las reservas las hace el servidor (función `book`), que comprueba cuota pagada, clases de la tarifa, bonos, hora de apertura, límite diario y plazas. Un socio solo puede cancelar la suya y antes del plazo; la lista de espera la mueve el servidor.
+- Nadie puede ponerse una tarifa, marcarse como pagado, darse bonos ni cambiarse el rol: eso solo lo hacen el dueño o Stripe.
+- Las tarjetas nunca pasan por la app: se meten en la página segura de Stripe. Los avisos de Stripe se aceptan solo con su firma.
+- Los socios importados de Aimharder tienen que confirmar su correo antes de entrar con su tarifa.
+- Las reglas se pueden probar con el simulador de Firebase (`firebase emulators:start`).
+- Recomendado: activar App Check (reCAPTCHA) para frenar envíos masivos de solicitudes de clase de prueba.
 
 ## Pagos con Stripe (opcional)
 Necesita el plan Blaze de Firebase (pago por uso; para un box suele salir a 0 €) y una cuenta de Stripe del box.

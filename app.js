@@ -201,6 +201,15 @@ async function renderJoin() {
   const setup = await be.get("config/setup").catch(() => ({}));
   const name = sessionStorage.getItem("cfi-name") || "";
   const m = $("#main");
+  const inv = S.user.email ? await be.get("invites/" + S.user.email.toLowerCase()).catch(() => null) : null;
+  // Becoming the owner or entering as an imported member needs a confirmed email, so nobody can claim someone else's.
+  if ((!setup || inv) && !be.demo && !S.user.emailVerified) {
+    m.innerHTML = `<div class="auth">${cara("Confirma tu correo", `Te hemos mandado un correo a <b>${esc(S.user.email)}</b>. Abre el enlace y vuelve aquí.`)}
+      <div class="card"><button class="btn primary block" id="vOk">Ya lo he confirmado</button><button class="btn ghost block" id="vAgain" style="margin-top:8px">Mandármelo otra vez</button><div class="err" id="vErr"></div></div></div>`;
+    $("#vOk").onclick = async () => { const ok = await be.refreshUser(); if (ok) { S.user.emailVerified = true; renderJoin(); } else $("#vErr").textContent = "Todavía no aparece confirmado. Mira también en la carpeta de spam."; };
+    $("#vAgain").onclick = async () => { try { await be.verifyEmail(); $("#vErr").textContent = "Enviado. Mira tu correo."; } catch (e) { $("#vErr").textContent = "Espera un poco antes de pedirlo otra vez."; } };
+    return;
+  }
   if (!setup) {
     m.innerHTML = `<div class="auth"><div class="card"><h3>Configurar el box</h3>
       <p>Esta es la primera cuenta de la app. Si eres el dueño del box, pulsa el botón: tu cuenta quedará como administradora y se cargarán las tarifas y el horario de ejemplo, que luego puedes cambiar.</p>
@@ -211,7 +220,6 @@ async function renderJoin() {
       { box: DEFAULT_BOX, schedule: DEFAULT_SCHEDULE }));
     return;
   }
-  const inv = S.user.email ? await be.get("invites/" + S.user.email.toLowerCase()).catch(() => null) : null;
   if (inv) {
     const p = planOf(inv.planId) || (await be.get("config/box").catch(() => null))?.plans?.find(x => x.id === inv.planId);
     m.innerHTML = `<div class="auth">${cara(`¡Aupa, ${esc(firstName(inv.name))}!`, `Ya eres del box${p ? ` con la tarifa <b>${esc(p.name)}</b>` : ""}. Revisa tus datos y entra.`)}
@@ -219,7 +227,7 @@ async function renderJoin() {
       <label>Teléfono<input id="jP" type="tel" maxlength="20" value="${esc(inv.phone || "")}"></label>
       <button class="btn primary block" style="margin-top:12px">Entrar al box</button></form></div></div>`;
     $("#jf").onsubmit = ev => { ev.preventDefault(); safe(async () => {
-      await be.set("members/" + S.user.uid, { role: "athlete", name: $("#jN").value.trim(), phone: $("#jP").value.trim(), email: S.user.email.toLowerCase(), sex: inv.sex || "", status: "active", planId: inv.planId || null, paidUntil: null, extra: 0, joined: today(), imported: true });
+      await be.set("members/" + S.user.uid, { role: "athlete", name: $("#jN").value.trim(), phone: $("#jP").value.trim(), email: S.user.email, sex: inv.sex || "", status: "active", planId: inv.planId || null, paidUntil: null, extra: 0, joined: today(), imported: true });
       await be.del("invites/" + S.user.email.toLowerCase());
     }); };
     return;
@@ -301,7 +309,9 @@ async function book(date, slot, list) {
   }
   const full = list.inn.length >= (slot.cap || 99);
   if (full && !await confirmDlg("Clase llena", "Esta clase está completa. ¿Te apunto a la lista de espera? Si alguien cancela, entras tú automáticamente.", "Apuntarme")) return;
-  await safe(() => be.set(`bookings/${date}__${slot.id}__${S.user.uid}`, { date, slotId: slot.id, uid: S.user.uid, name: me.name, type: slot.type, s: slot.s, at: new Date().toISOString(), wait: full, credit }));
+  // With Firebase the booking is made by the server, which checks every rule again so nobody can skip them.
+  if (be.demo) await safe(() => be.set(`bookings/${date}__${slot.id}__${S.user.uid}`, { date, slotId: slot.id, uid: S.user.uid, name: me.name, type: slot.type, s: slot.s, at: new Date().toISOString(), wait: full, credit }));
+  else try { await be.call("book", { date, slotId: slot.id, useCredit: credit }); } catch (e) { return toast(e?.message || "No se ha podido reservar. Inténtalo otra vez."); }
   const pos = list.wait.length + 1;
   toast((full ? `Estás en lista de espera: eres el ${pos}º. Si alguien cancela, entras solo.` : "¡Reservado! Nos vemos en el box.") + (S.me.mailBookings !== false ? ` Te mandamos un correo${be.demo ? " (en la demo no se envía)" : ""}.` : ""));
 }
@@ -316,7 +326,8 @@ async function cancelBooking(date, slot, bookingId, list, byStaff = false) {
     await be.del("bookings/" + bookingId);
     // Free spot: the first person waiting moves into the class.
     const next = list.wait[0];
-    if (wasIn && next && next.wait) await be.merge("bookings/" + next.id, { wait: false, promoted: true });
+    // With Firebase the server moves the first person waiting into the class.
+    if (be.demo && wasIn && next && next.wait) await be.merge("bookings/" + next.id, { wait: false, promoted: true });
   });
   toast(wasIn && list.wait[0] ? `Reserva cancelada. Tu plaza es ahora de ${firstName(list.wait[0].name)}.` : "Reserva cancelada.");
 }
@@ -370,6 +381,8 @@ function bindSlots(root, date, bookings, slots) {
 }
 
 let membersCache = null;
+// Start and cancel deadline stored on the booking so the database rules can enforce "cancel up to N hours before".
+const bookTimes = (date, slot) => be.demo ? {} : { startsAt: startsAt(date, slot.s), cutoff: new Date(startsAt(date, slot.s).getTime() - (S.box.cancelHours ?? 2) * 3600e3) };
 function manageSlot(date, slot, bookings) {
   const draw = () => {
     const list = splitList(bookings, slot), off = isOff(date, slot);
@@ -386,7 +399,7 @@ function manageSlot(date, slot, bookings) {
       $("#addB").onclick = async () => {
         const id = $("#addM").value; if (!id) return; const m = membersCache[id];
         const full = list.inn.length >= slot.cap;
-        const doc = { date, slotId: slot.id, uid: id, name: m.name, type: slot.type, s: slot.s, at: new Date().toISOString(), wait: full, credit: false };
+        const doc = { date, slotId: slot.id, uid: id, name: m.name, type: slot.type, s: slot.s, at: new Date().toISOString(), wait: full, credit: false, ...bookTimes(date, slot) };
         await safe(() => be.set(`bookings/${date}__${slot.id}__${id}`, doc)); bookings[`${date}__${slot.id}__${id}`] = doc; draw();
       };
       $("#trB").onclick = () => openDlg(`<h3>Clase de prueba</h3><p class="small muted" style="margin-top:0">${esc(typeOf(slot.type).name)} · ${fmtDay(date)} a las ${slot.s}. Ocupa una plaza de la clase.</p><form id="trF">
@@ -398,7 +411,7 @@ function manageSlot(date, slot, bookings) {
         $("#trF").onsubmit = async e => { e.preventDefault();
           const uid = "trial-" + Math.random().toString(36).slice(2, 9), id = `${date}__${slot.id}__${uid}`, name = $("#tN").value.trim();
           const full = splitList(bookings, slot).inn.length >= slot.cap;
-          const doc = { date, slotId: slot.id, uid, name, type: slot.type, s: slot.s, at: new Date().toISOString(), wait: full, credit: false, trial: true };
+          const doc = { date, slotId: slot.id, uid, name, type: slot.type, s: slot.s, at: new Date().toISOString(), wait: full, credit: false, trial: true, ...bookTimes(date, slot) };
           await safe(async () => {
             await be.set("bookings/" + id, doc);
             await be.set("trials/" + id, { name, email: $("#tE").value.trim().toLowerCase(), phone: $("#tP").value.trim(), date, slotId: slot.id, s: slot.s, type: slot.type, by: S.user.uid, at: doc.at });

@@ -1,0 +1,84 @@
+import { initializeTestEnvironment, assertSucceeds, assertFails } from "@firebase/rules-unit-testing";
+import { doc, setDoc, getDoc, deleteDoc, updateDoc, Timestamp, collection, getDocs, query, where } from "firebase/firestore";
+import fs from "fs";
+const env = await initializeTestEnvironment({ projectId: "demo-cfi", firestore: { rules: fs.readFileSync(new URL("../firestore.rules", import.meta.url), "utf8").replace("PON_AQUI_EL_CORREO_DEL_DUENO", "dueno@box.com"), host: "127.0.0.1", port: 8089 } });
+const as = (uid, email, verified = true) => env.authenticatedContext(uid, { email, email_verified: verified }).firestore();
+let pass = 0, failN = 0;
+const t = async (name, p, ok = true) => { try { await (ok ? assertSucceeds(p) : assertFails(p)); pass++; } catch (e) { failN++; console.log("✗", name, e.message.slice(0, 120)); } };
+const box = { plans: [{ id: "p1", name: "Pack 1" }], maxPerDay: 2 };
+// 1. Setup
+const evil = as("evil", "evil@x.com"), owner = as("own", "dueno@box.com"), ownerUnv = as("own2", "Dueno@box.com", false);
+await t("evil cannot become admin", setDoc(doc(evil, "members/evil"), { role: "admin", name: "E", email: "evil@x.com", status: "active", joined: "x" }), false);
+await t("evil cannot create box", setDoc(doc(evil, "config/box"), box), false);
+await t("unverified owner cannot", setDoc(doc(ownerUnv, "config/box"), box), false);
+await t("owner creates box", setDoc(doc(owner, "config/box"), box));
+await t("owner creates schedule", setDoc(doc(owner, "config/schedule"), { slots: [], off: {} }));
+await t("owner admin member", setDoc(doc(owner, "members/own"), { role: "admin", name: "D", email: "dueno@box.com", status: "active", joined: "x" }));
+await t("owner setup", setDoc(doc(owner, "config/setup"), { by: "own" }));
+await t("owner cannot redo setup after", setDoc(doc(as("own", "dueno@box.com"), "config/setup"), { by: "x" }), false);
+// seed
+await env.withSecurityRulesDisabled(async c => { const db = c.firestore();
+  await setDoc(doc(db, "members/coach"), { role: "coach", name: "C", email: "c@x.com", status: "active" });
+  await setDoc(doc(db, "members/ana"), { role: "athlete", name: "Ana", email: "ana@x.com", status: "active", planId: "p1", paidUntil: null, extra: 0 });
+  await setDoc(doc(db, "members/bea"), { role: "athlete", name: "Bea", email: "bea@x.com", status: "active", planId: "p1" });
+  await setDoc(doc(db, "invites/mikel@x.com"), { name: "Mikel", email: "mikel@x.com", planId: "p1" });
+  await setDoc(doc(db, "bookings/2026-10-10__s1__ana"), { uid: "ana", date: "2026-10-10", wait: false, cutoff: Timestamp.fromDate(new Date(Date.now() + 3600e3)) });
+  await setDoc(doc(db, "bookings/2026-10-01__s1__ana"), { uid: "ana", date: "2026-10-01", wait: false, cutoff: Timestamp.fromDate(new Date(Date.now() - 3600e3)) });
+  await setDoc(doc(db, "bookings/2026-10-10__s1__bea"), { uid: "bea", date: "2026-10-10", wait: true, cutoff: Timestamp.fromDate(new Date(Date.now() + 3600e3)) });
+  await setDoc(doc(db, "metrics/m1"), { uid: "ana", weight: 60 });
+  await setDoc(doc(db, "payments/p1"), { uid: "ana", amount: 59 });
+  await setDoc(doc(db, "trials/t1"), { name: "T", email: "t@x.com" });
+});
+const ana = as("ana", "ana@x.com"), bea = as("bea", "bea@x.com"), coach = as("coach", "c@x.com");
+// 2. sign-up
+const nu = as("nu", "nu@x.com");
+await t("new pending member ok", setDoc(doc(nu, "members/nu"), { role: "athlete", name: "N", email: "nu@x.com", status: "pending", planId: null, paidUntil: null, extra: 0, joined: "x" }));
+const nu2 = as("nu2", "nu2@x.com");
+await t("new member cannot give self plan", setDoc(doc(nu2, "members/nu2"), { role: "athlete", name: "N", email: "nu2@x.com", status: "pending", planId: "p1", paidUntil: null, extra: 0, joined: "x" }), false);
+await t("new member cannot add extra fields", setDoc(doc(nu2, "members/nu2"), { role: "athlete", name: "N", email: "nu2@x.com", status: "pending", planId: null, paidUntil: null, extra: 0, joined: "x", maxPerDay: 0 }), false);
+await t("new member cannot be coach", setDoc(doc(nu2, "members/nu2"), { role: "coach", name: "N", email: "nu2@x.com", status: "active", planId: null, paidUntil: null, extra: 0, joined: "x" }), false);
+// 3. invites
+const mkUnv = as("mk", "mikel@x.com", false), mk = as("mk", "mikel@x.com");
+const inv = { role: "athlete", name: "Mikel", email: "mikel@x.com", status: "active", planId: "p1", paidUntil: null, extra: 0, joined: "x", imported: true, sex: "" };
+await t("unverified cannot claim invite", setDoc(doc(mkUnv, "members/mk"), inv), false);
+await t("invite with other plan denied", setDoc(doc(mk, "members/mk"), { ...inv, planId: "p9" }), false);
+await t("verified claims invite", setDoc(doc(mk, "members/mk"), inv));
+await t("athlete cannot read invites list", getDocs(collection(ana, "invites")), false);
+// 4. self update
+await t("athlete edits name", updateDoc(doc(ana, "members/ana"), { name: "Ana G" }));
+await t("athlete cannot set plan", updateDoc(doc(ana, "members/ana"), { planId: "p2" }), false);
+await t("athlete cannot mark paid", updateDoc(doc(ana, "members/ana"), { paidUntil: "2030-01" }), false);
+await t("athlete cannot add credits", updateDoc(doc(ana, "members/ana"), { extra: 50 }), false);
+await t("athlete cannot become admin", updateDoc(doc(ana, "members/ana"), { role: "admin" }), false);
+await t("athlete cannot read others", getDoc(doc(ana, "members/bea")), false);
+await t("coach reads members", getDoc(doc(coach, "members/ana")));
+await t("coach sets per-day", updateDoc(doc(coach, "members/ana"), { maxPerDay: 3 }));
+await t("coach cannot change plan", updateDoc(doc(coach, "members/ana"), { planId: "p2" }), false);
+// 5. bookings
+await t("athlete cannot book directly", setDoc(doc(ana, "bookings/2026-10-11__s1__ana"), { uid: "ana", date: "2026-10-11", wait: false }), false);
+await t("athlete cannot promote self", updateDoc(doc(bea, "bookings/2026-10-10__s1__bea"), { wait: false }), false);
+await t("athlete cancels before deadline", deleteDoc(doc(ana, "bookings/2026-10-10__s1__ana")));
+await t("athlete cannot cancel after deadline", deleteDoc(doc(ana, "bookings/2026-10-01__s1__ana")), false);
+await t("athlete cannot cancel others", deleteDoc(doc(ana, "bookings/2026-10-10__s1__bea")), false);
+await t("coach books someone", setDoc(doc(coach, "bookings/2026-10-11__s1__ana"), { uid: "ana", date: "2026-10-11", wait: false }));
+// 6-11 privacy & money
+await t("other cannot read metrics", getDoc(doc(bea, "metrics/m1")), false);
+await t("coach cannot read metrics", getDoc(doc(coach, "metrics/m1")), false);
+await t("owner reads own metrics", getDoc(doc(ana, "metrics/m1")));
+await t("athlete cannot write payment", setDoc(doc(ana, "payments/x"), { uid: "ana", amount: 1 }), false);
+await t("athlete reads own payment", getDoc(doc(ana, "payments/p1")));
+await t("other cannot read payment", getDoc(doc(bea, "payments/p1")), false);
+const anon = env.unauthenticatedContext().firestore();
+await t("anon trial request ok", setDoc(doc(anon, "leads/l1"), { name: "X", phone: "", email: "x@x.com", msg: "", at: "x", done: false }));
+await t("anon cannot read leads", getDoc(doc(anon, "leads/l1")), false);
+await t("anon cannot read bookings", getDocs(collection(anon, "bookings")), false);
+await t("anon cannot read members", getDoc(doc(anon, "members/ana")), false);
+await t("coach can only change maxPerDay", updateDoc(doc(coach, "config/box"), { maxPerDay: 1 }));
+await t("coach cannot change prices", updateDoc(doc(coach, "config/box"), { plans: [] }), false);
+await t("athlete cannot change box", updateDoc(doc(ana, "config/box"), { maxPerDay: 0 }), false);
+await t("athlete cannot read trials", getDoc(doc(ana, "trials/t1")), false);
+await t("athlete cannot edit products", setDoc(doc(ana, "products/x"), { name: "x" }), false);
+await t("athlete cannot write wods", setDoc(doc(ana, "wods/2026-10-10"), { text: "x" }), false);
+await t("unknown collection denied", setDoc(doc(ana, "hack/x"), { a: 1 }), false);
+console.log(`\n${pass} ok, ${failN} fallos`);
+await env.cleanup();

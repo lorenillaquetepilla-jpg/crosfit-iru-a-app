@@ -14,6 +14,7 @@ const OPTS = { region: "europe-west1" };
 const ym = d => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
 const cents = n => Math.round(n * 100);
 const BOX = "CrossFit Iruña";
+const APP_URL = process.env.APP_URL || ""; // dirección de la app; los pagos solo vuelven aquí
 
 async function customerFor(stripe, uid, m) {
   if (m.stripeCustomer) return m.stripeCustomer;
@@ -26,7 +27,7 @@ exports.checkout = onCall({ ...OPTS, secrets: [STRIPE_KEY] }, async req => {
   const uid = req.auth?.uid;
   if (!uid) throw new HttpsError("unauthenticated", "Inicia sesión");
   const { kind, id, period, back } = req.data || {};
-  if (!/^https:\/\//.test(back || "")) throw new HttpsError("invalid-argument", "back");
+  if (!/^https:\/\//.test(back || "") || (APP_URL && !back.startsWith(APP_URL))) throw new HttpsError("invalid-argument", "back");
   const [ms, bs] = await Promise.all([db.doc(`members/${uid}`).get(), db.doc("config/box").get()]);
   if (!ms.exists) throw new HttpsError("failed-precondition", "Sin ficha de socio");
   const m = ms.data(), box = bs.data() || {};
@@ -65,7 +66,9 @@ exports.portal = onCall({ ...OPTS, secrets: [STRIPE_KEY] }, async req => {
   const m = (await db.doc(`members/${uid}`).get()).data() || {};
   if (!m.stripeCustomer) throw new HttpsError("failed-precondition", "Sin pagos con tarjeta");
   const stripe = Stripe(STRIPE_KEY.value());
-  const s = await stripe.billingPortal.sessions.create({ customer: m.stripeCustomer, return_url: req.data?.back, locale: "es" });
+  const back = String(req.data?.back || "");
+  if (!/^https:\/\//.test(back) || (APP_URL && !back.startsWith(APP_URL))) throw new HttpsError("invalid-argument", "back");
+  const s = await stripe.billingPortal.sessions.create({ customer: m.stripeCustomer, return_url: back, locale: "es" });
   return { url: s.url };
 });
 
@@ -131,14 +134,18 @@ const nodemailer = require("nodemailer");
 const SMTP_USER = defineSecret("SMTP_USER");
 const SMTP_PASS = defineSecret("SMTP_PASS");
 const DB_OPTS = { region: process.env.FIRESTORE_REGION || "europe-southwest1", secrets: [SMTP_USER, SMTP_PASS] };
-const APP_URL = process.env.APP_URL || "";
 const DAYS = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
 const MONTHS = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const dayTxt = ymd => { const [y, m, d] = ymd.split("-").map(Number); const dt = new Date(Date.UTC(y, m - 1, d)); return `${DAYS[dt.getUTCDay()]} ${d} de ${MONTHS[m - 1]}`; };
 const icsTime = (ymd, hm) => ymd.replace(/-/g, "") + "T" + hm.replace(":", "") + "00";
 
+// Sin cuenta de correo configurada (SMTP_USER sin "@") no se intenta enviar nada.
+const mailOn = () => /@/.test(SMTP_USER.value() || "");
+const transport = () => nodemailer.createTransport({ host: process.env.SMTP_HOST || "smtp.gmail.com", port: 465, secure: true, connectionTimeout: 10000, greetingTimeout: 10000,
+  auth: { user: SMTP_USER.value(), pass: SMTP_PASS.value() } });
 async function bookingMail(b, kind, pos) {
+  if (!mailOn() || String(b.uid).startsWith("trial-")) return;
   const [ms, ss, bs] = await Promise.all([db.doc(`members/${b.uid}`).get(), db.doc("config/schedule").get(), db.doc("config/box").get()]);
   const m = ms.data();
   if (!m?.email || m.mailBookings === false) return;
@@ -160,8 +167,7 @@ async function bookingMail(b, kind, pos) {
     `UID:${b.date}-${b.slotId}-${b.uid}@crossfit-iruna`, `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, "").slice(0, 15)}Z`,
     `DTSTART;TZID=Europe/Madrid:${icsTime(b.date, slot.s)}`, `DTEND;TZID=Europe/Madrid:${icsTime(b.date, slot.e)}`,
     `SUMMARY:${TYPES[b.type] || "Clase"} en ${BOX}`, "LOCATION:CrossFit Iruña, Orkoien", "END:VEVENT", "END:VCALENDAR"].join("\r\n");
-  const t = nodemailer.createTransport({ host: process.env.SMTP_HOST || "smtp.gmail.com", port: 465, secure: true, auth: { user: SMTP_USER.value(), pass: SMTP_PASS.value() } });
-  await t.sendMail({ from: `"${BOX}" <${SMTP_USER.value()}>`, to: m.email, subject, html,
+  await transport().sendMail({ from: `"${BOX}" <${SMTP_USER.value()}>`, to: m.email, subject, html,
     ...(ics ? { attachments: [{ filename: "clase.ics", content: ics, contentType: "text/calendar; charset=utf-8" }] } : {}) });
 }
 
@@ -178,7 +184,7 @@ exports.bookingPromoted = onDocumentUpdated({ ...DB_OPTS, document: "bookings/{i
 
 // Clase de prueba reservada por un coach: confirmación al correo de la persona, si lo dejó.
 exports.trialBooked = onDocumentCreated({ ...DB_OPTS, document: "trials/{id}" }, async ev => {
-  const t = ev.data?.data(); if (!t?.email) return;
+  const t = ev.data?.data(); if (!t?.email || !mailOn()) return;
   const ss = await db.doc("config/schedule").get();
   const slot = (ss.data()?.slots || []).find(s => s.id === t.slotId) || { s: t.s, e: t.s };
   const html = `<div style="font-family:Arial,sans-serif;max-width:520px;margin:auto;color:#1B0D10">
@@ -187,6 +193,74 @@ exports.trialBooked = onDocumentCreated({ ...DB_OPTS, document: "trials/{id}" },
       <p style="font-size:17px;margin:0 0 12px">¡Aupa, ${esc(String(t.name).split(" ")[0])}! Te esperamos en tu clase de prueba gratis.</p>
       <p style="font-size:20px;font-weight:bold;margin:0 0 12px;color:#4A1019">${esc(dayTxt(t.date))} de ${slot.s} a ${slot.e}</p>
       <p style="margin:0;color:#5A4247">Ven con ropa cómoda y 10 minutos antes. Si no puedes venir, responde a este correo.</p></div></div>`;
-  const tr = nodemailer.createTransport({ host: process.env.SMTP_HOST || "smtp.gmail.com", port: 465, secure: true, auth: { user: SMTP_USER.value(), pass: SMTP_PASS.value() } });
-  await tr.sendMail({ from: `"${BOX}" <${SMTP_USER.value()}>`, to: t.email, subject: `Tu clase de prueba en ${BOX}: ${dayTxt(t.date)} a las ${slot.s}`, html }).catch(e => console.error("mail", e.message));
+  await transport().sendMail({ from: `"${BOX}" <${SMTP_USER.value()}>`, to: t.email, subject: `Tu clase de prueba en ${BOX}: ${dayTxt(t.date)} a las ${slot.s}`, html }).catch(e => console.error("mail", e.message));
+});
+
+// ---------- Reservas en el servidor ----------
+// Las normas del box (cuota pagada, clases de la tarifa, bonos, hora de apertura, límite diario y plazas)
+// se comprueban aquí, no en el móvil, para que nadie pueda saltárselas trasteando con la app.
+const { onDocumentDeleted } = require("firebase-functions/v2/firestore");
+const TZ = "Europe/Madrid";
+const madridOffset = d => { const p = Object.fromEntries(new Intl.DateTimeFormat("en-US", { timeZone: TZ, hourCycle: "h23", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" }).formatToParts(d).map(x => [x.type, x.value]));
+  return Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second) - Math.floor(d.getTime() / 1000) * 1000; };
+const madridTime = (ymd, hm) => { const g = new Date(`${ymd}T${hm}:00Z`); return new Date(g.getTime() - madridOffset(g)); };
+const addDaysYmd = (ymd, n) => { const d = new Date(`${ymd}T12:00:00Z`); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+const isOpenType = t => t === "open" || t === "outdoor";
+const fail = msg => { throw new HttpsError("failed-precondition", msg); };
+
+exports.book = onCall({ ...OPTS }, async req => {
+  const uid = req.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "Inicia sesión");
+  const { date, slotId, useCredit } = req.data || {};
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date || "") || typeof slotId !== "string") throw new HttpsError("invalid-argument", "Reserva no válida");
+  const [ms, bs, ss] = await Promise.all([db.doc(`members/${uid}`).get(), db.doc("config/box").get(), db.doc("config/schedule").get()]);
+  const m = ms.data(), box = bs.data() || {}, sched = ss.data() || {};
+  if (!m || m.status !== "active") fail("Tu alta está pendiente. El box tiene que asignarte una tarifa.");
+  const slot = (sched.slots || []).find(s => s.id === slotId);
+  const wd = (new Date(`${date}T12:00:00Z`).getUTCDay() + 6) % 7;
+  if (!slot || slot.d !== wd) fail("Esa clase no existe.");
+  if (sched.off?.[date] || sched.off?.[`${date}__${slotId}`]) fail("Esta clase está cancelada.");
+  const start = madridTime(date, slot.s), now = new Date();
+  if (start <= now) fail("Esta clase ya ha empezado.");
+  const opens = madridTime(addDaysYmd(date, -(box.openDays ?? 2)), box.openTime || "21:00");
+  if (now < opens) fail(`Las reservas de esta clase se abren dos días antes a las ${box.openTime || "21:00"}.`);
+  const id = `${date}__${slotId}__${uid}`, ref = db.doc(`bookings/${id}`);
+  const month = date.slice(0, 7);
+  const plan = (box.plans || []).find(p => p.id === m.planId);
+  return db.runTransaction(async t => {
+    if ((await t.get(ref)).exists) fail("Ya tienes esta clase reservada.");
+    const mine = (await t.get(db.collection("bookings").where("uid", "==", uid))).docs.map(x => x.data());
+    const perDay = m.maxPerDay ?? box.maxPerDay ?? 2;
+    const sameDay = mine.filter(b => b.date === date);
+    if (perDay > 0 && sameDay.length >= perDay) fail(perDay === 1 ? "Solo se puede reservar una clase al día." : `Solo se pueden reservar ${perDay} clases al día.`);
+    const used = mine.filter(b => !b.wait && !b.credit && b.date.slice(0, 7) === month && isOpenType(b.type) === isOpenType(slot.type)).length;
+    const max = plan ? (isOpenType(slot.type) ? plan.open : plan.classes) : 0;
+    let credit = false;
+    if (max != null && used >= max) {
+      const extraLeft = Math.max(0, (m.extra || 0) - mine.filter(b => b.credit).length);
+      if (!extraLeft) fail("Has gastado las clases de tu tarifa este mes. Compra un bono en Cuota.");
+      if (!useCredit) fail("Confirma que quieres usar una clase de tu bono.");
+      credit = true;
+    } else if (plan && box.blockUnpaid !== false && !(m.paidUntil && m.paidUntil >= month)) fail("Tu cuota de este mes está pendiente. Págala en Cuota para reservar.");
+    const inClass = (await t.get(db.collection("bookings").where("date", "==", date).where("slotId", "==", slotId).where("wait", "==", false))).size;
+    const wait = inClass >= (slot.cap || 99);
+    const cutoff = new Date(start.getTime() - (box.cancelHours ?? 2) * 3600e3);
+    t.set(ref, { date, slotId, uid, name: m.name || "", type: slot.type, s: slot.s, at: now.toISOString(), wait, credit,
+      startsAt: start, cutoff });
+    return { wait, credit };
+  });
+});
+
+// Cuando alguien deja una plaza libre, entra el primero de la lista de espera (y le llega el correo de "has entrado").
+exports.bookingDeleted = onDocumentDeleted({ region: DB_OPTS.region, document: "bookings/{id}" }, async ev => {
+  const b = ev.data?.data(); if (!b || b.wait) return;
+  await db.runTransaction(async t => {
+    const q = await t.get(db.collection("bookings").where("date", "==", b.date).where("slotId", "==", b.slotId));
+    const docs = q.docs.map(x => ({ ref: x.ref, ...x.data() }));
+    const sched = (await t.get(db.doc("config/schedule"))).data() || {};
+    const cap = (sched.slots || []).find(s => s.id === b.slotId)?.cap || 99;
+    if (docs.filter(x => !x.wait).length >= cap) return;
+    const next = docs.filter(x => x.wait).sort((x, y) => x.at.localeCompare(y.at))[0];
+    if (next) t.update(next.ref, { wait: false, promoted: true });
+  });
 });
