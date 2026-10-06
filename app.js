@@ -244,6 +244,8 @@ function renderNav() {
   n.querySelectorAll("[data-t]").forEach(b => b.onclick = () => go(b.dataset.t));
 }
 const VIEWS = {};
+let waitKey = "", waitPos = {};
+const DEFAULT_REVIEW_URL = "https://www.google.com/search?q=CrossFit+Iru%C3%B1a+Orkoien";
 function go(tab) {
   clearView(); S.tab = tab; renderNav(); if (tab !== "wod") wodCopy = null;
   window.scrollTo(0, 0);
@@ -279,6 +281,11 @@ async function book(date, slot, list) {
   const me = S.me;
   if (me.status !== "active") return toast("Tu alta está pendiente. El box tiene que asignarte una tarifa.");
   if (!isOpenToBook(date)) return toast(`Las reservas de esta clase se abren el ${fmtDay(ymd(opensAt(date))).toLowerCase()} a las ${S.box.openTime || "21:00"}.`);
+  const perDay = S.box.maxPerDay ?? 1;
+  const sameDay = Object.values(S.myBookings).filter(b => b.date === date && b.slotId !== slot.id);
+  if (perDay > 0 && sameDay.length >= perDay) return toast(perDay === 1
+    ? `Ya tienes reserva ese día a las ${sameDay[0].s}. Solo se puede reservar una clase al día: cancela esa si quieres cambiarte.`
+    : `Solo se pueden reservar ${perDay} clases al día.`);
   const month = monthOf(date);
   const u = usage(month);
   const max = isOpenType(slot.type) ? u.openMax : u.clsMax;
@@ -295,7 +302,8 @@ async function book(date, slot, list) {
   const full = list.inn.length >= (slot.cap || 99);
   if (full && !await confirmDlg("Clase llena", "Esta clase está completa. ¿Te apunto a la lista de espera? Si alguien cancela, entras tú automáticamente.", "Apuntarme")) return;
   await safe(() => be.set(`bookings/${date}__${slot.id}__${S.user.uid}`, { date, slotId: slot.id, uid: S.user.uid, name: me.name, type: slot.type, s: slot.s, at: new Date().toISOString(), wait: full, credit }));
-  toast(full ? "Estás en lista de espera." : "¡Reservado! Nos vemos en el box.");
+  const pos = list.wait.length + 1;
+  toast((full ? `Estás en lista de espera: eres el ${pos}º. Si alguien cancela, entras solo.` : "¡Reservado! Nos vemos en el box.") + (S.me.mailBookings !== false ? ` Te mandamos un correo${be.demo ? " (en la demo no se envía)" : ""}.` : ""));
 }
 async function cancelBooking(date, slot, bookingId, list, byStaff = false) {
   if (!byStaff) {
@@ -308,9 +316,16 @@ async function cancelBooking(date, slot, bookingId, list, byStaff = false) {
     await be.del("bookings/" + bookingId);
     // Free spot: the first person waiting moves into the class.
     const next = list.wait[0];
-    if (wasIn && next && next.wait) await be.merge("bookings/" + next.id, { wait: false });
+    if (wasIn && next && next.wait) await be.merge("bookings/" + next.id, { wait: false, promoted: true });
   });
-  toast("Reserva cancelada.");
+  toast(wasIn && list.wait[0] ? `Reserva cancelada. Tu plaza es ahora de ${firstName(list.wait[0].name)}.` : "Reserva cancelada.");
+}
+
+const fetchQuery = (c, f) => new Promise((res, rej) => { let un = null, done = false; un = be.watchQuery(c, f, o => { if (done) return; done = true; res(o); setTimeout(() => un?.(), 0); }, rej); });
+async function cancelMine(b) {
+  const slot = (S.sched?.slots || []).find(s => s.id === b.slotId) || { id: b.slotId, s: b.s, e: b.s, cap: 99 };
+  const all = await fetchQuery("bookings", [["date", "==", b.date]]).catch(() => ({}));
+  await cancelBooking(b.date, slot, `${b.date}__${b.slotId}__${S.user.uid}`, splitList(all, slot));
 }
 
 // A class on day D can be booked from (D - openDays) at openTime.
@@ -327,7 +342,7 @@ function slotRow(date, slot, bookings, { staff = false } = {}) {
   let action = "";
   if (!staff) {
     if (off) action = '<span class="chip bad">Cancelada</span>';
-    else if (mine) action = `<button class="btn sm ${myWait ? "" : "primary"}" data-cancel="${slot.id}">${myWait ? `En espera ${list.wait.findIndex(b => b.id === mine[0]) + 1}º · Salir` : "✓ Reservado"}</button>`;
+    else if (mine) action = past ? `<span class="chip ${myWait ? "grey" : "ok"}">${myWait ? "En espera" : "✓ Fuiste"}</span>` : `<button class="btn sm two ${myWait ? "wait" : "primary"}" data-cancel="${slot.id}">${myWait ? `En espera: ${list.wait.findIndex(b => b.id === mine[0]) + 1}º<small>Toca para salir</small>` : `✓ Reservado<small>Toca para cancelar</small>`}</button>`;
     else if (!past && !isOpenToBook(date)) action = `<span class="chip grey">${opensTxt(date)}</span>`;
     else if (!past) action = `<button class="btn sm" data-book="${slot.id}">${full ? "Lista de espera" : "Reservar"}</button>`;
   } else {
@@ -466,6 +481,18 @@ VIEWS.hoy = root => {
       return;
     }
     const mineNext = Object.values(S.myBookings).filter(b => b.date >= d && !(b.date === d && startsAt(b.date, b.s) < new Date(Date.now() - 3600e3))).sort((a, b) => (a.date + a.s).localeCompare(b.date + b.s));
+    const waits = mineNext.filter(b => b.wait), wk = waits.map(b => b.date + b.slotId).join();
+    if (wk && wk !== waitKey) { waitKey = wk; Promise.all([...new Set(waits.map(b => b.date))].map(dt => fetchQuery("bookings", [["date", "==", dt]]).catch(() => ({})))).then(rs => {
+      const all = Object.assign({}, ...rs); waitPos = {};
+      for (const b of waits) { const sl = (S.sched?.slots || []).find(s => s.id === b.slotId); if (!sl) continue;
+        const l = Object.fromEntries(Object.entries(all).filter(([, x]) => x.date === b.date)); const i = splitList(l, sl).wait.findIndex(x => x.uid === S.user.uid); if (i >= 0) waitPos[b.date + b.slotId] = i + 1; }
+      draw(); }); }
+    const promoted = mineNext.filter(b => b.promoted && !b.wait);
+    const box = S.box || {};
+    const snooze = S.me.reviewSnooze || "";
+    const endOf = b => { const sl = (S.sched?.slots || []).find(s => s.id === b.slotId); return startsAt(b.date, sl ? sl.e : b.s).getTime() + (sl ? 0 : 3600e3); };
+    const doneClass = Object.values(S.myBookings).some(b => !b.wait && b.date === d && endOf(b) < Date.now());
+    const askReview = !S.me.reviewDone && (!snooze || snooze <= d) && doneClass && S.me.status === "active";
     const todayB = mineNext.find(b => b.date === d);
     const u = usage();
     const pending = S.me.status === "pending";
@@ -473,10 +500,14 @@ VIEWS.hoy = root => {
     const msg = pending ? ["¡Ya casi estás!", "El box tiene que revisar tu alta y asignarte una tarifa. Mientras, cotillea el WOD."]
       : unpaid ? ["Ojo con la cuota", `Tu cuota de ${monthName(thisMonth())} está pendiente. <a href="#" data-go="cuota">Págala aquí</a> y a entrenar.`]
       : todayB ? [`Hoy a las ${todayB.s}`, `Te esperamos en ${esc(typeOf(todayB.type).name)}. ¡Sin excusas!`]
+      : doneClass ? ["¡Buen trabajo hoy!", mineNext.length ? `Tu próxima clase: ${fmtDay(mineNext[0].date).toLowerCase()} a las ${mineNext[0].s}.` : 'Reserva ya la próxima en <a href="#" data-go="clases">Clases</a>.']
       : mineNext.length ? ["Hoy toca descanso", `Tu próxima clase: ${fmtDay(mineNext[0].date).toLowerCase()} a las ${mineNext[0].s}.`]
       : ["¿Hoy no entrenas?", 'Caravinagre te está mirando… <a href="#" data-go="clases">Reserva una clase</a>.'];
     const ns = Object.entries(notices).sort((a, b) => b[1].at.localeCompare(a[1].at)).slice(0, 3);
     root.innerHTML = `${cara(msg[0], msg[1])}
+      ${promoted.map(b => `<div class="card good"><h3>🎉 ¡Has entrado en la clase!</h3><p style="margin:0">Se ha liberado una plaza y ya estás dentro de ${esc(typeOf(b.type).name)} el ${fmtDay(b.date).toLowerCase()} a las ${b.s}.</p></div>`).join("")}
+      ${askReview ? `<div class="card review"><div class="row" style="align-items:flex-start"><span style="font-size:30px">⭐</span><div class="grow"><h3 style="margin:0 0 4px">¿Qué tal la clase de hoy?</h3><p class="small" style="margin:0">Si te gusta entrenar en CrossFit Iruña, ayúdanos con una reseña en Google. ¡Son dos minutos!</p></div></div>
+        <div class="row" style="margin-top:10px;gap:8px"><a class="btn primary" id="rvGo" href="${esc(box.reviewUrl || DEFAULT_REVIEW_URL)}" target="_blank" rel="noopener">Valorar en Google</a><button class="btn ghost" id="rvNo">Ahora no</button></div></div>` : ""}
       ${upcomingComps(comps).length ? compBanner(comps) : ""}
       ${ns.map(([, n]) => `<div class="card" style="border-left:5px solid var(--brand)"><h3>📣 ${esc(n.title)}</h3><div class="pre">${esc(n.body)}</div></div>`).join("")}
       <div class="h"><h2>WOD de hoy</h2></div>${wodCard(d, wod)}${rankingCard(d, wod, results)}
@@ -484,7 +515,11 @@ VIEWS.hoy = root => {
         <div class="qbox"><div class="n">${u.clsMax == null ? "∞" : Math.max(0, u.clsMax - u.cls)}</div><div class="l">clases te quedan</div></div>
         <div class="qbox"><div class="n">${u.openMax == null ? "∞" : Math.max(0, u.openMax - u.open)}</div><div class="l">sesiones Open te quedan</div></div></div>` : ""}
       <div class="h"><h2>Mis reservas</h2><a href="#" class="small" data-go="clases">Reservar</a></div>
-      <div class="card">${mineNext.length ? `<div class="list">${mineNext.slice(0, 6).map(b => `<div class="li" style="cursor:default"><span class="av" style="background:${typeOf(b.type).c};color:#fff">${b.s.slice(0, 2)}</span><span class="grow"><span class="t">${esc(typeOf(b.type).name)} · ${b.s}</span><br><span class="small muted">${fmtDay(b.date)}${b.wait ? " · en lista de espera" : ""}</span></span></div>`).join("")}</div>` : '<p class="empty">No tienes clases reservadas.</p>'}</div>`;
+      <div class="card">${mineNext.length ? `<div class="list">${mineNext.slice(0, 6).map((b, i) => `<div class="li" style="cursor:default"><span class="av" style="background:${typeOf(b.type).c};color:#fff">${b.s.slice(0, 2)}</span><span class="grow"><span class="t">${esc(typeOf(b.type).name)} · ${b.s}</span><br><span class="small muted">${fmtDay(b.date)}${b.wait ? ` · <b style="color:var(--warn)">en espera${waitPos[b.date + b.slotId] ? `: eres el ${waitPos[b.date + b.slotId]}º` : ""}</b>` : ""}</span></span>
+        ${startsAt(b.date, b.s) > new Date() ? `<button class="btn sm ${b.wait ? "" : "ghost"}" data-cm="${i}">${b.wait ? "Salir" : "Cancelar"}</button>` : ""}</div>`).join("")}</div>` : '<p class="empty">No tienes clases reservadas.</p>'}</div>`;
+    root.querySelectorAll("[data-cm]").forEach(x => x.onclick = () => cancelMine(mineNext[Number(x.dataset.cm)]));
+    $("#rvGo")?.addEventListener("click", () => safe(() => be.merge("members/" + S.user.uid, { reviewDone: true })));
+    $("#rvNo")?.addEventListener("click", () => safe(() => be.merge("members/" + S.user.uid, { reviewSnooze: addDays(d, 21) })));
     bindRanking(root, d, wod, results); bindBanner(root);
     root.querySelectorAll("[data-go]").forEach(b => b.onclick = e => { e.preventDefault(); go(b.dataset.go); });
   };
@@ -698,7 +733,7 @@ VIEWS.historial = root => {
 };
 
 /* ---------- PR party: confetti, streamers, glitter and a colour blast ---------- */
-function prParty({ lift, v, prev }) {
+function prParty({ lift, v, prev, sets, reps }) {
   const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
   try { navigator.vibrate?.([60, 40, 120]); } catch (e) {}
   const wrap = document.createElement("div");
@@ -707,7 +742,7 @@ function prParty({ lift, v, prev }) {
       <div class="party-cara">${CARA}</div>
       <div class="party-k">¡NUEVA MARCA PERSONAL!</div>
       <div class="party-v">${v.toLocaleString("es-ES")}<small> kg</small></div>
-      <div class="party-l">${esc(lift)}</div>
+      <div class="party-l">${esc(lift)}${reps > 1 ? ` · ${sets || 1}×${reps}` : ""}</div>
       ${prev != null ? `<div class="party-up">+${(Math.round((v - prev) * 10) / 10).toLocaleString("es-ES")} kg sobre tu anterior</div>` : '<div class="party-up">¡Tu primera marca!</div>'}
       <button class="btn primary block" id="partyOk">¡Vamos! 💪</button></div>`;
   document.body.appendChild(wrap);
@@ -790,6 +825,11 @@ function videoBox(url) {
   const id = ytId(u);
   return `<a class="vid" href="${esc(u)}" target="_blank" rel="noopener">${id ? `<img src="https://img.youtube.com/vi/${id}/mqdefault.jpg" alt="" loading="lazy" onerror="this.remove()">` : ""}<span>▶ Ver vídeo</span></a>`;
 }
+// A "max" is a single heavy rep (PR); marks with reps > 1 are work sets like 3×5 @ 80 kg.
+const isMax = m => !(m.reps > 1);
+const kgTxt = v => Number(v).toLocaleString("es-ES");
+const setsTxt = m => isMax(m) ? `${kgTxt(m.v)} kg` : `${m.sets || 1}×${m.reps} · ${kgTxt(m.v)} kg`;
+const sameKind = (a, b) => isMax(a) ? isMax(b) : (!isMax(b) && b.reps === a.reps && (b.sets || 1) === (a.sets || 1));
 function bestBy(marks) {
   const o = {};
   for (const [id, m] of Object.entries(marks)) if (!o[m.uid] || m.v > o[m.uid].v || (m.v === o[m.uid].v && m.date < o[m.uid].date)) o[m.uid] = { id, ...m };
@@ -807,7 +847,11 @@ VIEWS.marcas = root => {
   let mine = {}, pub = {}, monthB = {}, myRes = {};
   const draw = () => {
     const me = S.me, myBest = {};
-    for (const m of Object.values(mine)) if (!myBest[m.lift] || m.v > myBest[m.lift].v) myBest[m.lift] = m;
+    const mySets = {};
+    for (const m of Object.values(mine)) {
+      if (isMax(m)) { if (!myBest[m.lift] || m.v > myBest[m.lift].v) myBest[m.lift] = m; }
+      else if (!mySets[m.lift] || m.date > mySets[m.lift].date) mySets[m.lift] = m;
+    }
     const prsMonth = Object.values(mine).filter(m => monthOf(m.date) === thisMonth() && m.pr).length;
     const cls = Object.values(S.myBookings).filter(b => !b.wait && b.date <= today() && monthOf(b.date) === thisMonth()).length;
     const head = `<div class="card me-card"><div class="row"><span class="av big">${initials(me.name)}</span><div class="grow"><h3 style="margin:0">${esc(me.name)}</h3><span class="small muted">${esc(planOf(me.planId)?.name || "Atleta")} · CrossFit Iruña</span></div></div>
@@ -815,17 +859,19 @@ VIEWS.marcas = root => {
       <div class="tabs2"><button data-ps="marcas" aria-pressed="${panelSec === "marcas"}">Mis marcas</button><button data-ps="ranking" aria-pressed="${panelSec === "ranking"}">Ranking</button><button data-ps="muro" aria-pressed="${panelSec === "muro"}">Muro</button></div>`;
     let body = "";
     if (panelSec === "marcas") {
-      const names = [...new Set([...LIFTS, ...Object.keys(myBest)])];
+      const names = [...new Set([...LIFTS, ...Object.keys(myBest), ...Object.keys(mySets)])];
+      const recent = Object.values(mine).sort((a, b) => (b.date + b.at).localeCompare(a.date + a.at)).slice(0, 6);
       const res = Object.values(myRes).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 10);
       body = `<button class="btn primary block" id="newPR" style="margin-bottom:12px">＋ Apuntar una marca</button>
-        <div class="card"><div class="list">${names.map(n => { const b = myBest[n]; return `<div class="pr" data-l="${esc(n)}"><span class="grow"><b>${esc(n)}</b><br><span class="small muted">${b ? `${fmtShort(b.date)}${b.video ? " · 🎥 con vídeo" : ""}` : "Toca para apuntar tu marca"}</span></span><span class="kg">${b ? `${b.v.toLocaleString("es-ES")} <small class="small muted">kg</small>` : "—"}</span></div>`; }).join("")}</div>
+        <div class="card"><div class="list">${names.map(n => { const b = myBest[n]; return `<div class="pr" data-l="${esc(n)}"><span class="grow"><b>${esc(n)}</b><br><span class="small muted">${b ? `${fmtShort(b.date)}${b.video ? " · 🎥 con vídeo" : ""}` : mySets[n] ? "Aún sin máximo" : "Toca para apuntar tu marca"}${mySets[n] ? ` · última serie ${setsTxt(mySets[n])}` : ""}</span></span><span class="kg">${b ? `${kgTxt(b.v)} <small class="small muted">kg</small>` : "—"}</span></div>`; }).join("")}</div>
         <button class="btn sm ghost" id="newL" style="margin-top:6px">+ Otro ejercicio</button></div>
+        ${recent.length ? `<div class="h"><h2>Últimas marcas</h2></div><div class="card"><div class="list">${recent.map(m => `<div class="li" style="cursor:default"><span class="grow"><span class="t">${esc(m.lift)}</span>${m.pr ? ' <span class="chip ok">¡PR!</span>' : ""}<br><span class="small muted">${fmtDay(m.date)}${isMax(m) ? " · máximo" : ""}${m.note ? " · " + esc(m.note) : ""}</span></span><b>${setsTxt(m)}</b></div>`).join("")}</div></div>` : ""}
         <div class="h"><h2>Mis WODs</h2><a href="#" class="small" data-go="historial">Ver todos</a></div>
         <div class="card">${res.length ? `<div class="list">${res.map(r => `<div class="li" style="cursor:default"><span class="grow"><span class="t">${esc(r.score)}</span> ${r.rx ? '<span class="chip">RX</span>' : ""}<br><span class="small muted">${fmtDay(r.date)}${r.note ? " · " + esc(r.note) : ""}</span></span><span class="small">👊 ${Object.keys(r.likes || {}).length}</span></div>`).join("")}</div>` : '<p class="empty">Cuando apuntes resultados de WODs aparecerán aquí.</p>'}</div>`;
     }
     if (panelSec === "ranking") {
       const lifts = [...new Set([...LIFTS, ...Object.values(pub).map(m => m.lift)])];
-      const list = bestBy(Object.fromEntries(Object.entries(pub).filter(([, m]) => m.lift === rankLift && (!rankSex || m.sex === rankSex))));
+      const list = bestBy(Object.fromEntries(Object.entries(pub).filter(([, m]) => isMax(m) && m.lift === rankLift && (!rankSex || m.sex === rankSex))));
       const myPos = list.findIndex(m => m.uid === S.user.uid);
       const att = {}; for (const b of Object.values(monthB)) if (!b.wait && b.date <= today()) { (att[b.uid] ||= { n: 0, name: b.name }).n++; }
       const attList = Object.entries(att).sort((a, b) => b[1].n - a[1].n).slice(0, 10);
@@ -841,7 +887,7 @@ VIEWS.marcas = root => {
       const feed = Object.entries(pub).sort((a, b) => b[1].at.localeCompare(a[1].at)).slice(0, 40);
       body = `<p class="small muted" style="margin:0 0 10px">Las marcas que publica la gente del box. ¡Choca esos cinco!</p>
         ${feed.length ? feed.map(([id, m]) => `<div class="card post"><div class="row"><span class="av">${initials(m.name)}</span><div class="grow"><b>${esc(m.name)}</b><br><span class="small muted">${fmtDay(m.date)}</span></div>${m.pr ? '<span class="chip ok">¡PR!</span>' : ""}</div>
-          <div class="postbody"><span class="kg">${m.v.toLocaleString("es-ES")} kg</span> <span>${esc(m.lift)}</span></div>
+          <div class="postbody">${isMax(m) ? `<span class="kg">${kgTxt(m.v)} kg</span>` : `<span class="kg">${m.sets || 1}×${m.reps}</span> <span class="kg" style="font-size:22px">a ${kgTxt(m.v)} kg</span>`} <span>${esc(m.lift)}</span></div>
           ${m.note ? `<p style="margin:6px 0 0">${esc(m.note)}</p>` : ""}${videoBox(m.video)}
           <div class="row" style="margin-top:10px"><button class="bump" data-like="${id}" aria-pressed="${!!m.likes?.[S.user.uid]}" ${m.uid === S.user.uid ? "disabled" : ""}>👊 ${Object.keys(m.likes || {}).length || ""}</button></div></div>`).join("")
           : `<div class="card">${cara("Muro vacío", "Sé el primero: apunta una marca y publícala.")}</div>`}`;
@@ -858,42 +904,49 @@ VIEWS.marcas = root => {
     root.querySelectorAll("[data-like]").forEach(b => b.onclick = () => { const m = pub[b.dataset.like]; const likes = { ...(m.likes || {}) };
       if (likes[S.user.uid]) delete likes[S.user.uid]; else likes[S.user.uid] = true; safe(() => be.set("marks/" + b.dataset.like, { ...m, likes })); });
   };
-  const markForm = (lift = LIFTS[0]) => {
+  const markForm = (lift = LIFTS[0], kind = markKind) => {
     const lifts = [...new Set([...LIFTS, ...Object.values(mine).map(m => m.lift), lift])];
     openDlg(`<h3>Nueva marca</h3><form id="mkf">
+      <div class="tabs2" style="margin-bottom:4px"><button type="button" data-mk="max" aria-pressed="${kind === "max"}">Máximo (1 rep)</button><button type="button" data-mk="sets" aria-pressed="${kind === "sets"}">Series</button></div>
+      <p class="small muted" style="margin:4px 0 0">${kind === "max" ? "Tu peso máximo a una repetición. Cuenta para el ranking." : "Lo que has movido en el entreno, por ejemplo 3 series de 5 a 80 kg."}</p>
       <label>Ejercicio<select id="kL">${lifts.map(l => `<option ${l === lift ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
-      <div class="grid2"><label>Kilos<input id="kV" type="number" step="0.5" min="1" max="500" required inputmode="decimal"></label><label>Fecha<input id="kD" type="date" value="${today()}" max="${today()}" required></label></div>
+      ${kind === "sets" ? `<div class="grid3"><label>Series<input id="kS" type="number" min="1" max="20" step="1" value="3" required inputmode="numeric"></label><label>Reps<input id="kR" type="number" min="2" max="50" step="1" value="5" required inputmode="numeric"></label><label>Kilos<input id="kV" type="number" step="0.5" min="1" max="500" required inputmode="decimal"></label></div>` : ""}
+      <div class="grid2">${kind === "max" ? `<label>Kilos<input id="kV" type="number" step="0.5" min="1" max="500" required inputmode="decimal"></label>` : ""}<label>Fecha<input id="kD" type="date" value="${today()}" max="${today()}" required></label></div>
       <label>Vídeo (opcional)<input id="kY" type="url" maxlength="300" placeholder="Pega el enlace de YouTube"></label>
-      <label>Comentario (opcional)<input id="kN" maxlength="140" placeholder="Ej.: ¡Por fin!"></label>
-      <label class="check"><input type="checkbox" id="kP" checked> Publicar en el muro y en el ranking</label>
+      <label>Comentario (opcional)<input id="kN" maxlength="140" placeholder="${kind === "max" ? "Ej.: ¡Por fin!" : "Ej.: Muy fácil, la próxima subo"}"></label>
+      <label class="check"><input type="checkbox" id="kP" checked> Publicar en el muro${kind === "max" ? " y en el ranking" : ""}</label>
       <div class="err" id="kE"></div>
       <div class="dlgbtns"><button type="button" class="btn" id="kC">Cancelar</button><button class="btn primary">Guardar marca</button></div></form>`, () => {
       $("#kC").onclick = closeDlg;
+      $("#dlgBody").querySelectorAll("[data-mk]").forEach(b => b.onclick = () => { markKind = b.dataset.mk; markForm($("#kL").value, markKind); });
       $("#mkf").onsubmit = async e => { e.preventDefault();
         const l = $("#kL").value, v = parseFloat($("#kV").value), video = $("#kY").value.trim();
+        const sets = kind === "sets" ? parseInt($("#kS").value) : null, reps = kind === "sets" ? parseInt($("#kR").value) : null;
         if (video && !cleanUrl(video)) { $("#kE").textContent = "El enlace del vídeo tiene que empezar por https://"; return; }
-        const prev = Object.values(mine).filter(m => m.lift === l), pr = !prev.length || v > Math.max(...prev.map(m => m.v));
-        await safe(() => be.add("marks", { uid: S.user.uid, name: S.me.name, sex: S.me.sex || "", lift: l, v, date: $("#kD").value, video: cleanUrl(video), note: $("#kN").value.trim(), public: $("#kP").checked, pr, at: new Date().toISOString(), likes: {} }));
+        const cur = { sets, reps };
+        const prev = Object.values(mine).filter(m => m.lift === l && sameKind(cur, m)), pr = !prev.length || v > Math.max(...prev.map(m => m.v));
+        await safe(() => be.add("marks", { uid: S.user.uid, name: S.me.name, sex: S.me.sex || "", lift: l, v, sets, reps, date: $("#kD").value, video: cleanUrl(video), note: $("#kN").value.trim(), public: $("#kP").checked, pr, at: new Date().toISOString(), likes: {} }));
         closeDlg();
-        if (pr && prev.length) prParty({ lift: l, v, prev: Math.max(...prev.map(m => m.v)) });
-        else toast(prev.length ? "Marca apuntada." : "¡Primera marca apuntada! Ahora a superarla 💪");
+        if (pr && prev.length) prParty({ lift: l, v, prev: Math.max(...prev.map(m => m.v)), sets, reps });
+        else toast(prev.length ? "Marca apuntada." : kind === "sets" ? `${sets}×${reps} a ${kgTxt(v)} kg apuntado. ¡La próxima, más! 💪` : "¡Primera marca apuntada! Ahora a superarla 💪");
       };
     });
   };
   const liftDlg = name => {
-    const arr = Object.entries(mine).filter(([, m]) => m.lift === name).map(([id, m]) => ({ id, ...m })).sort((a, b) => a.date.localeCompare(b.date));
-    if (!arr.length) return markForm(name);
-    const b = Math.max(...arr.map(x => x.v));
+    const all = Object.entries(mine).filter(([, m]) => m.lift === name).map(([id, m]) => ({ id, ...m })).sort((a, b) => a.date.localeCompare(b.date));
+    if (!all.length) return markForm(name);
+    const arr = all.filter(isMax);
+    const b = arr.length ? Math.max(...arr.map(x => x.v)) : null;
     const spark = () => {
       if (arr.length < 2) return "";
       const vs = arr.map(x => x.v), mn = Math.min(...vs), mx = Math.max(...vs), W = 300, H = 70, P = 6;
       const pts = arr.map((x, i) => [P + i * (W - 2 * P) / (arr.length - 1), H - P - (mx === mn ? .5 : (x.v - mn) / (mx - mn)) * (H - 2 * P)]);
       return `<svg class="spark" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><polyline points="${pts.map(p => p.join(",")).join(" ")}" fill="none" stroke="#4A1019" stroke-width="2.5" vector-effect="non-scaling-stroke"/>${pts.map(p => `<circle cx="${p[0]}" cy="${p[1]}" r="3.5" fill="#4A1019"/>`).join("")}</svg>`;
     };
-    openDlg(`<h3>${esc(name)}</h3><p class="muted">Tu mejor marca: <b style="color:var(--brand)">${b} kg</b></p>
-      <div class="pct">${[50, 60, 65, 70, 75, 80, 85, 90].map(p => `<div><b>${Math.round(b * p / 100 * 2) / 2}</b>${p} %</div>`).join("")}</div>${spark()}
+    openDlg(`<h3>${esc(name)}</h3>${b != null ? `<p class="muted">Tu máximo: <b style="color:var(--brand)">${kgTxt(b)} kg</b></p>
+      <div class="pct">${[50, 60, 65, 70, 75, 80, 85, 90].map(p => `<div><b>${kgTxt(Math.round(b * p / 100 * 2) / 2)}</b>${p} %</div>`).join("")}</div>${spark()}` : '<p class="muted">Aún no tienes un máximo de este ejercicio. Apúntalo para ver tus porcentajes.</p>'}
       <button class="btn primary block" id="lAdd" style="margin-top:12px">＋ Apuntar nueva marca</button>
-      <label>Historial</label><div class="list">${arr.slice().reverse().map(x => `<div class="li" style="cursor:default"><span class="grow">${fmtDay(x.date)}${x.public ? "" : ' <span class="chip grey">privada</span>'}${cleanUrl(x.video) ? ` · <a href="${esc(cleanUrl(x.video))}" target="_blank" rel="noopener">vídeo</a>` : ""}</span><b>${x.v} kg</b><button class="btn sm danger" data-del="${x.id}" aria-label="Borrar">✕</button></div>`).join("")}</div>
+      <label>Historial</label><div class="list">${all.slice().reverse().map(x => `<div class="li" style="cursor:default"><span class="grow">${fmtDay(x.date)}${isMax(x) ? "" : ' <span class="chip">series</span>'}${x.public ? "" : ' <span class="chip grey">privada</span>'}${cleanUrl(x.video) ? ` · <a href="${esc(cleanUrl(x.video))}" target="_blank" rel="noopener">vídeo</a>` : ""}</span><b>${setsTxt(x)}</b><button class="btn sm danger" data-del="${x.id}" aria-label="Borrar">✕</button></div>`).join("")}</div>
       <div class="dlgbtns"><button class="btn" id="lC">Cerrar</button></div>`, r2 => {
       $("#lC").onclick = closeDlg;
       $("#lAdd").onclick = () => markForm(name);
@@ -1146,6 +1199,7 @@ VIEWS.cuota = root => {
       <div class="h"><h2>Mis datos</h2></div>
       <div class="card"><form id="mf"><label>Nombre<input id="mN" value="${esc(me.name)}" required maxlength="80"></label><label>Teléfono<input id="mP" type="tel" value="${esc(me.phone || "")}" maxlength="20"></label>
         <label>Categoría en los rankings<select id="mX"><option value="">Sin categoría</option><option value="f" ${me.sex === "f" ? "selected" : ""}>Chicas</option><option value="m" ${me.sex === "m" ? "selected" : ""}>Chicos</option></select></label>
+        <label class="check" style="margin-top:12px"><input type="checkbox" id="mM" ${me.mailBookings !== false ? "checked" : ""}> Mandarme un correo con cada reserva</label>
         <p class="small muted">Correo: ${esc(S.user.email)}</p><button class="btn">Guardar mis datos</button></form></div>`;
     const pay = async (kind, id, period) => {
       const what = kind === "plan" ? planOf(id)?.name : box.passes.find(x => x.id === id)?.name;
@@ -1163,7 +1217,7 @@ VIEWS.cuota = root => {
         $("#pkC").onclick = closeDlg; d.querySelectorAll("[data-pay]").forEach(x => x.onclick = () => { closeDlg(); setTimeout(() => pay("plan", x.dataset.pay, x.dataset.per), 50); }); }); });
     root.querySelectorAll("[data-pass]").forEach(b => b.onclick = () => pay("pass", b.dataset.pass));
     $("#portal")?.addEventListener("click", async () => { try { const r = await be.call("portal", { back: location.origin + location.pathname }); if (r?.url) location.href = r.url; } catch (e) { toast("No se ha podido abrir."); } });
-    $("#mf").onsubmit = e => { e.preventDefault(); safe(() => be.merge("members/" + S.user.uid, { name: $("#mN").value.trim(), phone: $("#mP").value.trim(), sex: $("#mX").value })).then(() => toast("Datos guardados.")); };
+    $("#mf").onsubmit = e => { e.preventDefault(); safe(() => be.merge("members/" + S.user.uid, { name: $("#mN").value.trim(), phone: $("#mP").value.trim(), sex: $("#mX").value, mailBookings: $("#mM").checked })).then(() => toast("Datos guardados.")); };
   };
   queryV("payments", [["uid", "==", S.user.uid]], o => { pays = o; draw(); });
   return { draw };
@@ -1254,6 +1308,7 @@ function inviteDlg(id, m) {
   });
 }
 
+let markKind = "max";
 let sociosFilter = "todos", sociosQ = "";
 let schedDay = (new Date().getDay() + 6) % 7;
 VIEWS.socios = root => {
@@ -1445,6 +1500,9 @@ VIEWS.box = root => {
           <label>Cancelar hasta (horas antes)<input id="cH" type="number" min="0" max="48" value="${box.cancelHours ?? 2}"></label>
           <div class="grid2"><label>Las reservas se abren (días antes)<input id="oD" type="number" min="0" max="30" value="${box.openDays ?? 2}"></label><label>a las<input id="oT" type="time" step="300" value="${box.openTime || "21:00"}"></label></div>
           <p class="small muted" style="margin:4px 0 0">Ahora: la clase del miércoles se puede reservar desde el lunes a las ${esc(box.openTime || "21:00")}.</p>
+          <label>Reservas máximas por persona y día<select id="mD">${[[1, "1 clase al día"], [2, "2 clases al día"], [0, "Sin límite"]].map(([v, l]) => `<option value="${v}" ${(box.maxPerDay ?? 1) === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+          <label>Enlace para reseñas de Google<input id="rU" type="url" maxlength="300" value="${esc(box.reviewUrl || "")}" placeholder="https://g.page/r/…/review"></label>
+          <p class="small muted" style="margin:4px 0 0">Lo sacas en Google Business Profile → "Pedir reseñas". Al acabar la clase, la app invita a los socios a valorar el box.</p>
           <label class="check" style="margin-top:12px"><input type="checkbox" id="bU" ${box.blockUnpaid !== false ? "checked" : ""}> No dejar reservar si la cuota del mes está sin pagar</label></div>
         <button class="btn primary block">Guardar tarifas y normas</button></form>`;
       const collect = () => ({
@@ -1457,7 +1515,7 @@ VIEWS.box = root => {
         if (n) return toast(`${n} socios tienen esta tarifa. Cámbiales la tarifa antes de quitarla.`);
         const c = collect(); c.plans.splice(Number(b.dataset.rmp), 1); S.box = { ...box, plans: c.plans }; SECS.tarifas(sec); });
       $("#tf").onsubmit = async e => { e.preventDefault(); const c = collect();
-        await safe(() => be.merge("config/box", { ...c, discounts: { semester: Number($("#dS").value) || 0, year: Number($("#dY").value) || 0 }, cancelHours: Number($("#cH").value), openDays: Number($("#oD").value), openTime: $("#oT").value || "21:00", blockUnpaid: $("#bU").checked }));
+        await safe(() => be.merge("config/box", { ...c, discounts: { semester: Number($("#dS").value) || 0, year: Number($("#dY").value) || 0 }, cancelHours: Number($("#cH").value), openDays: Number($("#oD").value), openTime: $("#oT").value || "21:00", blockUnpaid: $("#bU").checked, maxPerDay: Number($("#mD").value), reviewUrl: /^https:\/\//.test($("#rU").value.trim()) ? $("#rU").value.trim() : null }));
         document.activeElement?.blur(); toast("Tarifas guardadas."); };
     },
     avisos(sec) {

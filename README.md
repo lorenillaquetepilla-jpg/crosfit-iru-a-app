@@ -20,6 +20,13 @@ Necesita el plan Blaze de Firebase (pago por uso; para un box suele salir a 0 �
 4. En Stripe → Configuración → Métodos de pago: activar tarjeta y adeudo directo SEPA. Activar el portal de clientes.
 5. Poner `stripe: true` en `firebase-config.js`.
 
+## Correo con cada reserva (opcional)
+También necesita el plan Blaze. Usa una cuenta de correo del box (por ejemplo Gmail con una "contraseña de aplicación").
+1. `firebase functions:secrets:set SMTP_USER` (el correo) y `firebase functions:secrets:set SMTP_PASS` (la contraseña de aplicación).
+2. En `functions/.env` poner `APP_URL=https://…` (la dirección de la app) y, si Firestore no está en Madrid, `FIRESTORE_REGION=` con su región.
+3. `firebase deploy --only functions`.
+Cada socio puede desactivar los correos en Cuota → Mis datos.
+
 Sin Stripe, el dueño apunta los pagos (Bizum, efectivo…) desde la ficha de cada socio.
 
 ## Roles

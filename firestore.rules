@@ -42,7 +42,7 @@ service cloud.firestore {
           && !('stripeCustomer' in request.resource.data)));
       allow update: if isAdmin()
         || (isStaff() && onlyChanges(['status']) && resource.data.role == 'athlete')
-        || (signedIn() && request.auth.uid == uid && onlyChanges(['name', 'phone', 'sex']));
+        || (signedIn() && request.auth.uid == uid && onlyChanges(['name', 'phone', 'sex', 'mailBookings', 'reviewDone', 'reviewSnooze']));
       allow delete: if isAdmin();
     }
 
@@ -54,7 +54,7 @@ service cloud.firestore {
         || isStaff();
       allow delete: if (signedIn() && resource.data.uid == request.auth.uid) || isStaff();
       // Anyone cancelling can move the first person on the waiting list into the class.
-      allow update: if isStaff() || (isActive() && onlyChanges(['wait']) && request.resource.data.wait == false);
+      allow update: if isStaff() || (isActive() && onlyChanges(['wait', 'promoted']) && request.resource.data.wait == false);
     }
 
     match /wods/{date} {

@@ -276,3 +276,10 @@ table.lb tr.mine td{background:var(--brand-soft)}
 .daychk span{display:inline-block;min-width:44px;text-align:center;padding:9px 6px;border:1px solid var(--line);border-radius:10px;background:#fff;font-weight:600;cursor:pointer}
 .daychk input:checked + span{background:var(--brand);color:#fff;border-color:var(--brand)}
 .daychk input:focus-visible + span{outline:2px solid var(--brand-3)}
+/* Botón de reserva con segunda línea (cancelar / salir de la espera) */
+.btn.two{display:inline-flex;flex-direction:column;align-items:center;line-height:1.15;padding-top:6px;padding-bottom:6px}
+.btn.two small{font-size:11px;font-weight:500;opacity:.85}
+.btn.wait{background:var(--warn-soft);color:var(--warn);border-color:transparent}
+.card.good{border-left:5px solid var(--ok);background:var(--ok-soft)}
+.card.review{border-left:5px solid #F5B400}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}

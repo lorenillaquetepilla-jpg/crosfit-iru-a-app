@@ -1,6 +1,6 @@
 // Modo demostración: mismos métodos que backend-firebase.js, con los datos guardados en este navegador.
 import { DEFAULT_BOX, DEFAULT_SCHEDULE } from "./defaults.js";
-const KEY = "cfi-demo-v6";
+const KEY = "cfi-demo-v7";
 
 const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 const dayOff = n => { const d = new Date(); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() + n); return d; };
@@ -78,6 +78,8 @@ function seed() {
   mark("u-mikel", "Back squat", 140, 3, { note: "PR de la temporada", likes: { "u-iker": true, "u-unai": true, "demo-ana": true } }); mark("u-iker", "Back squat", 125, 12); mark("u-javier", "Back squat", 132.5, 25); mark("u-unai", "Back squat", 118, 40);
   mark("u-mikel", "Snatch", 85, 6); mark("u-iker", "Snatch", 80, 2, { likes: { "u-mikel": true } }); mark("u-laura", "Snatch", 50, 9); mark("demo-ana", "Snatch", 42.5, 11);
   mark("u-mikel", "Clean & jerk", 110, 18); mark("u-laura", "Clean & jerk", 65, 1, { note: "Con split jerk por primera vez" }); mark("u-irati", "Clean", 55, 4);
+  mark("demo-ana", "Back squat", 60, 9, { sets: 3, reps: 5, pr: true }); mark("demo-ana", "Front squat", 50, 3, { sets: 5, reps: 3, pr: true, note: "Muy fácil, la próxima subo" });
+  mark("u-irati", "Back squat", 55, 1, { sets: 3, reps: 8, note: "3×8 sin parar 🔥", likes: { "demo-ana": true } });
   mark("u-javier", "Peso muerto", 190, 22); mark("u-mikel", "Peso muerto", 200, 35); mark("u-maite", "Peso muerto", 100, 7);
   const pay = (uid, amount, method, month, plan) => { db["payments/" + Math.random().toString(36).slice(2, 10)] = { uid, name: db["members/" + uid].name, amount, method, month, concept: plan, at: now, by: "demo-david" }; };
   pay("demo-ana", 82, "tarjeta", month, "Pack 3"); pay("u-mikel", 105, "tarjeta", month, "Ilimitada");
