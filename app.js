@@ -934,7 +934,8 @@ VIEWS.marcas = root => {
       const names = [...new Set([...LIFTS, ...Object.keys(myBest), ...Object.keys(mySets)])];
       const recent = Object.values(mine).sort((a, b) => (b.date + b.at).localeCompare(a.date + a.at)).slice(0, 6);
       const res = Object.values(myRes).sort((a, b) => b.date.localeCompare(a.date)).slice(0, 10);
-      body = `<button class="btn primary block" id="newPR" style="margin-bottom:12px">＋ Apuntar una marca</button>
+      body = `<button class="btn primary block" id="newPR" style="margin-bottom:10px">＋ Apuntar una marca</button>
+        <button class="btn block yt" id="newVid" style="margin-bottom:12px">▶ Añadir vídeo de YouTube</button>
         <div class="card"><div class="list">${names.map(n => { const b = myBest[n]; return `<div class="pr" data-l="${esc(n)}"><span class="grow"><b>${esc(n)}</b><br><span class="small muted">${b ? `${fmtShort(b.date)}${b.video ? " · 🎥 con vídeo" : ""}` : mySets[n] ? "Aún sin máximo" : "Toca para apuntar tu marca"}${mySets[n] ? ` · última serie ${setsTxt(mySets[n])}` : ""}</span></span><span class="kg">${b ? `${kgTxt(b.v)} <small class="small muted">kg</small>` : "—"}</span></div>`; }).join("")}</div>
         <button class="btn sm ghost" id="newL" style="margin-top:6px">+ Otro ejercicio</button></div>
         ${recent.length ? `<div class="h"><h2>Últimas marcas</h2></div><div class="card"><div class="list">${recent.map(m => `<div class="li" style="cursor:default"><span class="grow"><span class="t">${esc(m.lift)}</span>${m.pr ? ' <span class="chip ok">¡PR!</span>' : ""}<br><span class="small muted">${fmtDay(m.date)}${isMax(m) ? " · máximo" : ""}${m.note ? " · " + esc(m.note) : ""}</span></span><b>${setsTxt(m)}</b></div>`).join("")}</div></div>` : ""}
@@ -994,12 +995,32 @@ VIEWS.marcas = root => {
     root.querySelectorAll("[data-go]").forEach(b => b.onclick = e => { e.preventDefault(); go(b.dataset.go); });
     root.querySelectorAll("[data-l]").forEach(b => b.onclick = () => liftDlg(b.dataset.l));
     $("#newPR")?.addEventListener("click", () => markForm());
+    $("#newVid")?.addEventListener("click", () => videoDlg());
     $("#newL")?.addEventListener("click", () => openDlg(`<h3>Nuevo ejercicio</h3><form id="nf"><label>Nombre<input id="nN" required maxlength="40" placeholder="Ej.: Overhead squat"></label><div class="dlgbtns"><button type="button" class="btn" id="nC">Cancelar</button><button class="btn primary">Seguir</button></div></form>`, () => {
       $("#nC").onclick = closeDlg; $("#nf").onsubmit = e => { e.preventDefault(); markForm($("#nN").value.trim()); }; }));
     $("#rkL")?.addEventListener("change", e => { rankLift = e.target.value; draw(); });
     $("#rkS")?.addEventListener("change", e => { rankSex = e.target.value; draw(); });
     root.querySelectorAll("[data-like]").forEach(b => b.onclick = () => { const m = pub[b.dataset.like]; const likes = { ...(m.likes || {}) };
       if (likes[S.user.uid]) delete likes[S.user.uid]; else likes[S.user.uid] = true; safe(() => be.set("marks/" + b.dataset.like, { ...m, likes })); });
+  };
+  const videoDlg = () => {
+    const list = Object.entries(mine).sort(([, a], [, b]) => (b.date + b.at).localeCompare(a.date + a.at)).slice(0, 30);
+    if (!list.length) { toast("Primero apunta una marca y luego le añades el vídeo."); markForm(); return; }
+    openDlg(`<h3>Añadir vídeo de YouTube</h3><form id="vf">
+      <p class="small muted" style="margin:0">Sube el vídeo a tu YouTube, copia el enlace y pégalo aquí. Saldrá en tu marca y en el muro.</p>
+      <label>¿De qué marca es?<select id="vM">${list.map(([k, m]) => `<option value="${esc(k)}">${esc(m.lift)} · ${esc(setsTxt(m))} · ${esc(fmtShort(m.date))}${cleanUrl(m.video) ? " · ya tiene vídeo" : ""}</option>`).join("")}</select></label>
+      <label>Enlace de YouTube<input id="vU" type="url" maxlength="300" required placeholder="https://youtu.be/..." inputmode="url"></label>
+      <div class="err" id="vE"></div>
+      <div class="dlgbtns"><button type="button" class="btn" id="vC">Cancelar</button><button class="btn primary">Guardar vídeo</button></div></form>`, () => {
+      $("#vC").onclick = closeDlg;
+      $("#vf").onsubmit = async e => { e.preventDefault();
+        const url = cleanUrl($("#vU").value), m = mine[$("#vM").value];
+        if (!url) { $("#vE").textContent = "El enlace tiene que empezar por https://"; return; }
+        if (!m) return;
+        const { id, ...data } = m;
+        await safe(() => be.set("marks/" + $("#vM").value, { ...data, video: url }));
+        closeDlg(); toast("🎥 ¡Vídeo añadido!"); };
+    });
   };
   const markForm = (lift = LIFTS[0], kind = markKind) => {
     const lifts = [...new Set([...LIFTS, ...Object.values(mine).map(m => m.lift), lift])];
@@ -1009,7 +1030,7 @@ VIEWS.marcas = root => {
       <label>Ejercicio<select id="kL">${lifts.map(l => `<option ${l === lift ? "selected" : ""}>${esc(l)}</option>`).join("")}</select></label>
       ${kind === "sets" ? `<div class="grid3"><label>Series<input id="kS" type="number" min="1" max="20" step="1" value="3" required inputmode="numeric"></label><label>Reps<input id="kR" type="number" min="2" max="50" step="1" value="5" required inputmode="numeric"></label><label>Kilos<input id="kV" type="number" step="0.5" min="1" max="500" required inputmode="decimal"></label></div>` : ""}
       <div class="grid2">${kind === "max" ? `<label>Kilos<input id="kV" type="number" step="0.5" min="1" max="500" required inputmode="decimal"></label>` : ""}<label>Fecha<input id="kD" type="date" value="${today()}" max="${today()}" required></label></div>
-      <label>Vídeo (opcional)<input id="kY" type="url" maxlength="300" placeholder="Pega el enlace de YouTube"></label>
+      <label>🎥 Vídeo de YouTube (opcional)<input id="kY" type="url" maxlength="300" placeholder="Pega el enlace de YouTube"></label>
       <label>Comentario (opcional)<input id="kN" maxlength="140" placeholder="${kind === "max" ? "Ej.: ¡Por fin!" : "Ej.: Muy fácil, la próxima subo"}"></label>
       <label class="check"><input type="checkbox" id="kP" checked> Publicar en el muro${kind === "max" ? " y en el ranking" : ""}</label>
       <div class="err" id="kE"></div>
